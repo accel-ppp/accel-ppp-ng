@@ -85,6 +85,9 @@ IF (HAVE_LOGWTMP)
 	ADD_DEFINITIONS(-DHAVE_LOGWTMP)
 ENDIF (HAVE_LOGWTMP)
 
+IF (HAVE_VPP)
+	ADD_DEFINITIONS(-DHAVE_VPP)
+ENDIF (HAVE_VPP)
 
 ADD_SUBDIRECTORY(triton)
 ADD_SUBDIRECTORY(vlan-mon)
@@ -170,6 +173,15 @@ ADD_EXECUTABLE(accel-pppd
 	log.c
 	main.c
 )
+
+IF (HAVE_VPP)
+	TARGET_SOURCES(accel-pppd PRIVATE
+				   vpputils/vpputils.c
+				   vpputils/vpppoe.c
+				   vpputils/vppiputils.c
+	)
+	TARGET_LINK_LIBRARIES(accel-pppd vapiclient vlibapi vlib)
+endif(HAVE_VPP)
 
 # check if we have getcontext/setcontext
 INCLUDE(CheckFunctionExists)

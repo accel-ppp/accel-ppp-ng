@@ -36,6 +36,12 @@
 
 #include "memdebug.h"
 
+#include "ipdb.h"
+
+#include "vpputils.h"
+#include "vpppoe.h"
+#include "vppiputils.h"
+
 #define SID_MAX 65536
 
 #ifndef min
@@ -224,6 +230,23 @@ static void ppp_started(struct ap_session *ses)
 	log_ppp_debug("pppoe: ppp started\n");
 }
 
+#ifdef HAVE_VPP
+int pppoe_terminate(struct ap_session *ses, int hard) {
+	int ret = 0;
+	struct ppp_t *ppp = container_of(ses, typeof(*ppp), ses);
+	struct pppoe_conn_t *conn = container_of(ppp, typeof(*conn), ppp);
+
+	if (ppp->is_vpppoe) {
+		vpp_iproute_flush(ses);
+		vpppoe_sync_del_pppoe_interface(conn->addr, conn->sid);
+	}
+
+	ret = ppp_terminate(ses, hard);
+
+	return ret;
+}
+#endif /* HAVE_VPP */
+
 static void ppp_finished(struct ap_session *ses)
 {
 	struct ppp_t *ppp = container_of(ses, typeof(*ppp), ses);
@@ -237,6 +260,33 @@ static void ppp_finished(struct ap_session *ses)
 		triton_context_call(&conn->ctx, (triton_event_func)disconnect, conn);
 	}
 }
+
+#ifdef HAVE_VPP
+int pppoe_create_vpp_session_interface(struct ap_session *ses) {
+	struct ppp_t *ppp = container_of(ses, typeof(*ppp), ses);
+	struct pppoe_conn_t *conn = container_of(ppp, typeof(*conn), ppp);
+	uint32_t ifindex = -1;
+	int ret = 0;
+
+	if (!ppp->ses.ipv4) {
+		log_error("VPPPOE: VPP requires IPv4 peer address for session initialization");
+		return -1;
+	}
+
+	ret = vpppoe_sync_add_pppoe_interface(conn->addr, &ses->ipv4->peer_addr, conn->sid, &ifindex);
+	if (ret) {
+		return ret;
+	}
+
+	ses->vpp_sw_if_index = ifindex;
+
+	vpppoe_set_feature(ifindex, 0, "ip4-not-enabled", "ip4-unicast");
+	vpppoe_set_feature(ifindex, 0, "ip6-not-enabled", "ip6-unicast");
+	vpp_iproute_add_del(ses, 1, ifindex, 0, ses->ipv4->peer_addr, 0, ETH_P_ALL, 32, 0);
+
+	return 0;
+}
+#endif /* HAVE_VPP */
 
 static void pppoe_conn_close(struct triton_context_t *ctx)
 {
@@ -348,7 +398,11 @@ static struct pppoe_conn_t *allocate_channel(struct pppoe_serv_t *serv, const ui
 	conn->ctrl.ctx = &conn->ctx;
 	conn->ctrl.started = ppp_started;
 	conn->ctrl.finished = ppp_finished;
+#ifdef HAVE_VPP
+	conn->ctrl.terminate = pppoe_terminate;
+#else
 	conn->ctrl.terminate = ppp_terminate;
+#endif /* HAVE_VPP */
 	conn->ctrl.max_mtu = min(ETH_DATA_LEN, serv->mtu) - 8;
 	conn->ctrl.type = CTRL_TYPE_PPPOE;
 	conn->ctrl.ppp = 1;
@@ -414,6 +468,14 @@ static struct pppoe_conn_t *allocate_channel(struct pppoe_serv_t *serv, const ui
 			addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
 
 	ppp_init(&conn->ppp);
+
+#ifdef HAVE_VPP
+	if (serv->is_vpppoe) {
+		conn->ctrl.dont_ifcfg = 1;
+		conn->ppp.is_vpppoe = 1;
+		conn->ppp.ses.non_dev_ppp_fixup = pppoe_create_vpp_session_interface;
+	}
+#endif /* HAVE_VPP */
 
 	conn->ppp.ses.net = serv->net;
 	conn->ppp.ses.ctrl = &conn->ctrl;
@@ -1331,10 +1393,13 @@ static void pppoe_serv_timeout(struct triton_timer_t *t)
 	pppoe_server_free(serv);
 }
 
-static int parse_server(const char *opt, int *padi_limit, struct ap_net **net)
+static int parse_server(const char *opt, int *padi_limit, struct ap_net **net, int *is_vpppoe)
 {
 	char *ptr, *endptr;
-	char name[64];
+	char optval[64];
+
+	if (is_vpppoe)
+		*is_vpppoe = 0;
 
 	while (*opt == ',') {
 		opt++;
@@ -1349,13 +1414,22 @@ static int parse_server(const char *opt, int *padi_limit, struct ap_net **net)
 		} else if (!strncmp(opt, "net=", sizeof("net=") - 1)) {
 			ptr++;
 			for (endptr = ptr + 1; *endptr && *endptr != ','; endptr++);
-			if (endptr - ptr >= sizeof(name))
+			if (endptr - ptr >= sizeof(optval))
 				goto out_err;
-			memcpy(name, ptr, endptr - ptr);
-			name[endptr - ptr] = 0;
-			*net = ap_net_find(name);
+			memcpy(optval, ptr, endptr - ptr);
+			optval[endptr - ptr] = 0;
+			*net = ap_net_find(optval);
 			if (!*net)
 				goto out_err;
+		} else if (!strncmp(opt, "vpp-cp=", sizeof("vpp-cp=") - 1)) {
+			ptr++;
+			for (endptr = ptr + 1; *endptr && *endptr != ','; endptr++);
+			memcpy(optval, ptr, endptr - ptr);
+			optval[endptr - ptr] = 0;
+			if (is_vpppoe)
+				*is_vpppoe = !strncasecmp(optval, "enable", sizeof("enable") - 1) ||
+								!strncasecmp(optval, "true", sizeof("true") - 1) ||
+								!strncasecmp(optval, "1", sizeof("1") - 1);
 		} else
 			goto out_err;
 	}
@@ -1447,9 +1521,10 @@ static void __pppoe_server_start(const char *ifname, const char *opt, void *cli,
 	struct pppoe_serv_t *serv;
 	struct ifreq ifr;
 	int padi_limit = conf_padi_limit;
+	int is_vpppoe = 0;
 	net = def_net;
 
-	if (parse_server(opt, &padi_limit, &net)) {
+	if (parse_server(opt, &padi_limit, &net, &is_vpppoe)) {
 		if (cli)
 			cli_sendv(cli, "failed to parse '%s'\r\n", opt);
 		else
@@ -1457,6 +1532,17 @@ static void __pppoe_server_start(const char *ifname, const char *opt, void *cli,
 
 		return;
 	}
+
+#ifndef HAVE_VPP
+	if (is_vpppoe) {
+		if (cli)
+			cli_sendv(cli, "No support for vpp, option vpp-cp invalid for interface %s\r\n", ifname);
+		else
+			log_error("pppoe: No support for vpp, option vpp-cp invalid for interface %s\r\n", ifname);
+
+		return;
+	}
+#endif /* HAVE_VPP */
 
 	pthread_rwlock_rdlock(&serv_lock);
 	list_for_each_entry(serv, &serv_list, entry) {
@@ -1483,6 +1569,13 @@ static void __pppoe_server_start(const char *ifname, const char *opt, void *cli,
 	}
 
 	strncpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
+
+	serv->is_vpppoe = is_vpppoe;
+
+#ifdef HAVE_VPP
+	if (serv->is_vpppoe)
+		vpp_get();
+#endif /* HAVE_VPP */
 
 	if (net->sock_ioctl(SIOCGIFFLAGS, &ifr)) {
 		if (cli)
@@ -1575,6 +1668,12 @@ static void __pppoe_server_start(const char *ifname, const char *opt, void *cli,
 	return;
 
 out_err:
+
+#ifdef HAVE_VPP
+	if (serv->is_vpppoe)
+		vpp_put();
+#endif /* HAVE_VPP */
+
 	_free(serv);
 }
 
@@ -1627,6 +1726,12 @@ void pppoe_server_free(struct pppoe_serv_t *serv)
 	}
 
 	triton_context_unregister(&serv->ctx);
+
+#ifdef HAVE_VPP
+	if (serv->is_vpppoe)
+		vpp_put();
+#endif /* HAVE_VPP */
+
 	_free(serv->ifname);
 	_free(serv);
 }

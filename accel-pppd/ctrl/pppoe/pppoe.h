@@ -99,6 +99,7 @@ struct pppoe_serv_t
 
 	unsigned int stopping:1;
 	unsigned int vlan_mon:1;
+	unsigned int is_vpppoe:1;
 };
 
 extern int conf_verbose;

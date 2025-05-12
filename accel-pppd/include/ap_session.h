@@ -120,6 +120,10 @@ struct ap_session
 	uint64_t acct_rx_bytes_i;
 	uint64_t acct_tx_bytes_i;
 	int acct_start;
+
+	int (*non_dev_ppp_fixup)(struct ap_session*);
+	uint32_t vpp_sw_if_index;
+	struct list_head vpp_routes;
 };
 
 struct ap_session_stat

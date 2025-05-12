@@ -61,6 +61,20 @@ struct ppp_t
 	struct list_head unit_handlers;
 
 	struct list_head layers;
+
+	/** 
+ 	 * In non-dev-ppp environment, channel and unit reads would be performed
+	 * through the same socket and will use the same handler/function.
+	 * This flag sets that additionally unit handlers would be used.
+	 */
+	int is_unit_read_enabled;
+
+	/**
+	 * If this flag is set, then the related /dev/ppp routine would be omitted.
+	 * The socket `fd` would be used to read channel and unit data.
+	 * g.e. `establish_ppp()` would not open /dev/ppp
+	 */
+	int is_vpppoe;
 };
 
 struct ppp_layer_t;
