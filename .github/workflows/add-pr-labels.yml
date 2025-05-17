@@ -1,0 +1,16 @@
+---
+name: Add pull request labels
+
+on:
+  pull_request_target:
+    branches:
+      - current
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  add-pr-label:
+    uses: accel-ppp/.github/.github/workflows/add-pr-labels.yml@current
+    secrets: inherit

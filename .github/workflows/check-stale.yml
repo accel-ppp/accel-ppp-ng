@@ -1,0 +1,13 @@
+name: "Issue and PR stale management"
+on:
+  schedule:
+  - cron: "0 0 * * *"
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  stale:
+    uses: accel-ppp/.github/.github/workflows/check-stale.yml@current
+    secrets: inherit
