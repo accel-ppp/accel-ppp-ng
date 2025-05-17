@@ -1,0 +1,14 @@
+name: Check for unused imports using Pylint
+on:
+  pull_request_target:
+    branches:
+      - current
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  check-unused-imports:
+    uses: accel-ppp/.github/.github/workflows/check-unused-imports.yml@T7461-add-reusable-actions
+    secrets: inherit
