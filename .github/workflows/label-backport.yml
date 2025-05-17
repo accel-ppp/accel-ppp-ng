@@ -8,5 +8,5 @@ permissions:
 
 jobs:
   mergifyio-backport:
-    uses: accel-ppp/.github/.github/workflows/label-backport.yml@T7461-add-reusable-actions
+    uses: accel-ppp/.github/.github/workflows/label-backport.yml@current
     secrets: inherit

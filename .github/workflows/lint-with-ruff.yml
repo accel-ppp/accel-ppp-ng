@@ -10,5 +10,5 @@ permissions:
 
 jobs:
   ruff-lint:
-    uses: accel-ppp/.github/.github/workflows/lint-with-ruff.yml@T7461-add-reusable-actions
+    uses: accel-ppp/.github/.github/workflows/lint-with-ruff.yml@current
     secrets: inherit

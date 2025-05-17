@@ -10,5 +10,5 @@ permissions:
 
 jobs:
   assign-author:
-    uses: accel-ppp/.github/.github/workflows/assign-author.yml@T7461-add-reusable-actions
+    uses: accel-ppp/.github/.github/workflows/assign-author.yml@current
     secrets: inherit

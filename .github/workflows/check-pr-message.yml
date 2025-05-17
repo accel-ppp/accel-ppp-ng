@@ -13,5 +13,5 @@ permissions:
 
 jobs:
   check-pr-title:
-    uses: accel-ppp/.github/.github/workflows/check-pr-message.yml@T7461-add-reusable-actions
+    uses: accel-ppp/.github/.github/workflows/check-pr-message.yml@current
     secrets: inherit

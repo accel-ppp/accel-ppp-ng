@@ -10,5 +10,5 @@ permissions:
 
 jobs:
   add-rebase-label:
-    uses: accel-ppp/.github/.github/workflows/add-rebase-label.yml@T7461-add-reusable-actions
+    uses: accel-ppp/.github/.github/workflows/add-rebase-label.yml@current
     secrets: inherit

@@ -10,5 +10,5 @@ permissions:
 
 jobs:
   check-pr-conflict-call:
-    uses: accel-ppp/.github/.github/workflows/check-pr-merge-conflict.yml@T7461-add-reusable-actions
+    uses: accel-ppp/.github/.github/workflows/check-pr-merge-conflict.yml@current
     secrets: inherit

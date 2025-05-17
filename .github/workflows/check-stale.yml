@@ -9,5 +9,5 @@ permissions:
 
 jobs:
   stale:
-    uses: accel-ppp/.github/.github/workflows/check-stale.yml@T7461-add-reusable-actions
+    uses: accel-ppp/.github/.github/workflows/check-stale.yml@current
     secrets: inherit
