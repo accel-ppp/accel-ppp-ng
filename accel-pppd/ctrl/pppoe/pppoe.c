@@ -232,14 +232,16 @@ int pppoe_terminate(struct ap_session *ses, int hard) {
 	struct ppp_t *ppp = container_of(ses, typeof(*ppp), ses);
 	struct pppoe_conn_t *conn = container_of(ppp, typeof(*conn), ppp);
 
-	ret = vpppoe_lcp_tun_add_del(ses->vpp_sw_if_index, ses->ifname, 0);
-	if (ret)
-		log_warn("VPPPOE: Can't remove VPP lcp TUN pair at terminate: sw_if_index %d name %s\n", ses->vpp_sw_if_index, ses->ifname);
-	else {
-		ret = vpppoe_pppoe_session_add_del(conn->addr, &ses->ipv4->peer_addr, conn->sid, 0, NULL);
-		if (ret)
-			log_warn("VPPPOE: Can't remove session at terminate:  %d %02x.%02x.%02x.%02x.%02x.%02x", conn->sid,
-						conn->addr[0], conn->addr[1], conn->addr[2], conn->addr[3], conn->addr[4], conn->addr[5]);
+	if (ppp->is_non_dev_ppp)
+	{
+		if (ses->non_dev_ppp_fixup_status == 2) {
+			vpppoe_async_del_pppoe_interface(conn->addr, &ses->ipv4->peer_addr, conn->sid, ses->vpp_sw_if_index, ses->ifname);
+		} else if (ses->non_dev_ppp_fixup_status == 1) {
+			vpppoe_setup_pppoe_interface_ctx_t *callback_ctx = (vpppoe_setup_pppoe_interface_ctx_t *)ses->non_dev_ppp_fixup_priv;
+
+			__sync_or_and_fetch(&callback_ctx->remove_after, 1);
+		}
+
 	}
 
 	ret = ppp_terminate(ses, hard);
@@ -261,6 +263,71 @@ static void ppp_finished(struct ap_session *ses)
 	}
 }
 
+static void pppoe_async_vpppoe_session_created_cb(vpppoe_setup_pppoe_interface_ctx_t *callback_ctx) {
+	int ret;
+	struct ifreq ifr;
+	struct ap_session *ses = (struct ap_session *)callback_ctx->priv;
+	struct ppp_t *ppp = container_of(ses, typeof(*ppp), ses);
+	struct pppoe_conn_t *conn = container_of(ppp, typeof(*conn), ppp);
+
+	if (callback_ctx->err) {
+		ses->non_dev_ppp_fixup_status = 0;
+		ap_session_terminate(ses, TERM_NAS_ERROR, 0);
+		_free(callback_ctx);
+		return;
+	}
+	
+	ses->non_dev_ppp_fixup_status = 2;
+
+	if (__sync_and_and_fetch(&callback_ctx->remove_after, 1)) {
+		vpppoe_async_del_pppoe_interface(conn->addr, &ses->ipv4->peer_addr, conn->sid, ses->vpp_sw_if_index, ses->ifname);
+		_free(callback_ctx);
+		return;
+	}
+
+	ses->vpp_sw_if_index = callback_ctx->ifindex;
+	
+	strncpy(ses->ifname, callback_ctx->ifname, IFNAMSIZ - 1);
+	memset(&ifr, 0, sizeof(ifr));
+	strncpy(ifr.ifr_name, ses->ifname, IFNAMSIZ - 1);
+	ret = net->sock_ioctl(SIOCGIFINDEX, &ifr);
+	if (ret) {
+		log_error("VPPPOE: Can't get host ifindex for the interface %s: %s\n", ifr.ifr_name, strerror(errno));
+		// ap_session_terminate(ses, TERM_NAS_ERROR, 0);
+		// free(callback_ctx);
+		return;
+	}
+
+	ses->ifindex = ifr.ifr_ifindex;
+
+	if (ppp->mtu) {
+		memset(&ifr, 0, sizeof(ifr));
+		strcpy(ifr.ifr_name, ses->ifname);
+		ifr.ifr_mtu = ppp->mtu;
+		ret = net->sock_ioctl(SIOCSIFMTU, &ifr);
+		if (ret) {
+			log_error("VPPPOE: Can't setup MTU for interface %s value %d: %s\n", ifr.ifr_name, ifr.ifr_mtu, strerror(errno));
+			// ap_session_terminate(ses, TERM_NAS_ERROR, 0);
+			// free(callback_ctx);
+			return;
+		}
+	}
+
+	/* TODO: move it to the ifcfg? */
+	ret = iproute_add(ses->ifindex, 0, ses->ipv4->peer_addr, 0, ETH_P_ALL, 32, 0);
+	if (ret) {
+		log_warn("VPPPOE: Can't setup route %d.%d.%d.%d/32 for interface %d: %s\n",
+			ses->ipv4->peer_addr >> 24 & 0xff, ses->ipv4->peer_addr >> 16 & 0xff, ses->ipv4->peer_addr >> 8 & 0xff, ses->ipv4->peer_addr & 0xff,
+			ses->ifindex, strerror(errno));
+		// ap_session_terminate(ses, TERM_NAS_ERROR, 0);
+		// free(callback_ctx);
+		return;
+	}
+
+	free(callback_ctx);
+	ap_session_activate(ses);
+}
+
 int pppoe_create_non_dev_ppp_interface(struct ap_session *ses) {
 	struct ppp_t *ppp = container_of(ses, typeof(*ppp), ses);
 	struct pppoe_conn_t *conn = container_of(ppp, typeof(*conn), ppp);
@@ -274,66 +341,16 @@ int pppoe_create_non_dev_ppp_interface(struct ap_session *ses) {
 		return -1;
 	}
 
-	ret = vpppoe_pppoe_session_add_del(conn->addr, &ses->ipv4->peer_addr, conn->sid, 1, &ifindex);
-	if (ret) {
-		log_error("VPPPOE: Can't create VPP session: %d %02x.%02x.%02x.%02x.%02x.%02x", conn->sid,
-								conn->addr[0], conn->addr[1], conn->addr[2], conn->addr[3], conn->addr[4], conn->addr[5]);
-		return -1;
-	}
+	ses->non_dev_ppp_fixup_status = 1;
 
-	snprintf(name, 15, "vppp%d", ifindex);
-
-	ret = vpppoe_lcp_tun_add_del(ifindex, name, 1);
-	if (ret) {
-		log_error("VPPPOE: Can't create VPP lcp TUN pair: sw_if_index %d name %s\n", ifindex, name);
-		goto lsp_vpp_err;
-	}
-
-	ret = vpppoe_set_feature(ifindex, 0, "ip4-not-enabled", "ip4-unicast");
-	if (ret) {
-		log_error("VPPPOE: Can't set ip4 feature\n");
-		goto post_vpp_err;
-	}
-
-	if (!ppp->ses.ipv6) {
-		ret = vpppoe_set_feature(ifindex, 0, "ip6-not-enabled", "ip6-unicast");
-		if (ret) {
-			log_error("VPPPOE: Can't set ip6 feature\n");
-			goto post_vpp_err;
-		}
-	}
-
-	ses->vpp_sw_if_index = ifindex;
-	
-	strncpy(ses->ifname, name, IFNAMSIZ - 1);
-	memset(&ifr, 0, sizeof(ifr));
-	strncpy(ifr.ifr_name, ses->ifname, IFNAMSIZ - 1);
-	ret = net->sock_ioctl(SIOCGIFINDEX, &ifr);
-	if (ret) {
-		log_error("VPPPOE: Can't get host ifindex for the interface %s: %s\n", ifr.ifr_name, strerror(errno));
-		goto post_vpp_err;
-	}
-	ses->ifindex = ifr.ifr_ifindex;
-
-	if (ppp->mtu) {
-		memset(&ifr, 0, sizeof(ifr));
-		strcpy(ifr.ifr_name, ses->ifname);
-		ifr.ifr_mtu = ppp->mtu;
-		ret = net->sock_ioctl(SIOCSIFMTU, &ifr);
-		if (ret) {
-			log_error("VPPPOE: Can't setup MTU for interface %s value %d: %s\n", ifr.ifr_name, ifr.ifr_mtu, strerror(errno));
-			goto post_vpp_err;
-		}
-	}
-
-	/* TODO: move it to the ifcfg? */
-	ret = iproute_add(ses->ifindex, 0, ses->ipv4->peer_addr, 0, ETH_P_ALL, 32, 0);
-	if (ret) {
-		log_warn("VPPPOE: Can't setup route %d.%d.%d.%d/32 for interface %d: %s\n",
-			ses->ipv4->peer_addr >> 24 & 0xff, ses->ipv4->peer_addr >> 16 & 0xff, ses->ipv4->peer_addr >> 8 & 0xff, ses->ipv4->peer_addr & 0xff,
-			ses->ifindex, strerror(errno));
-		goto post_vpp_err;
-	}
+	vpppoe_setup_pppoe_interface_ctx_t *callback_ctx = _malloc(sizeof(*callback_ctx));
+	memset(callback_ctx, 0, sizeof(*callback_ctx));
+	callback_ctx->tctx = &conn->ctx;
+	callback_ctx->callback = pppoe_async_vpppoe_session_created_cb;
+	callback_ctx->priv = ses;
+	callback_ctx->remove_after = 0;
+	ses->non_dev_ppp_fixup_priv = callback_ctx;
+	vpppoe_async_add_pppoe_interface(conn->addr, &ses->ipv4->peer_addr, conn->sid, callback_ctx);
 
 	return 0;
 
@@ -350,6 +367,7 @@ lsp_vpp_err:
 	}
 
 	ses->vpp_sw_if_index = -1;
+	ses->non_dev_ppp_fixup_status = 0;
 
 	return -1;
 }
@@ -473,10 +491,6 @@ static struct pppoe_conn_t *allocate_channel(struct pppoe_serv_t *serv, const ui
 	conn->ctrl.ifname = serv->ifname;
 	conn->ctrl.mppe = conf_mppe;
 
-	if (serv->is_non_dev_ppp) {
-		conn->ctrl.non_dev_ppp_fixup = pppoe_create_non_dev_ppp_interface;
-	}
-
 	if (ppp_max_payload > ETH_DATA_LEN - 8)
 		conn->ctrl.max_mtu = min(ppp_max_payload, serv->mtu - 8);
 
@@ -555,6 +569,11 @@ static struct pppoe_conn_t *allocate_channel(struct pppoe_serv_t *serv, const ui
 		conn->ppp.ses.ifname_rename = _strdup(conf_ifname);
 	if (conf_session_timeout)
 		conn->ppp.ses.session_timeout = conf_session_timeout;
+
+	if (serv->is_non_dev_ppp) {
+		conn->ppp.ses.non_dev_ppp_fixup = pppoe_create_non_dev_ppp_interface;
+		conn->ppp.ses.non_dev_ppp_fixup_status = 0;
+	}
 
 	triton_context_register(&conn->ctx, conn);
 
@@ -2276,7 +2295,7 @@ static void pppoe_init(void)
 	int fd;
 	uint8_t *ptr;
 
-	vpppoe_init();
+	// vpppoe_init();
 
 	ptr = malloc(SID_MAX/8);
 	memset(ptr, 0xff, SID_MAX/8);

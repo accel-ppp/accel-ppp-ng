@@ -150,9 +150,14 @@ void __export ap_session_activate(struct ap_session *ses)
 	if (ap_shutdown)
 		return;
 
-	if (ses->ctrl->non_dev_ppp_fixup != NULL)
-		if (ses->ctrl->non_dev_ppp_fixup(ses))
-			ap_session_terminate(ses, TERM_NAS_ERROR, 0);
+	if (ses->non_dev_ppp_fixup != NULL) {
+		if (!ses->non_dev_ppp_fixup_status) {
+			ses->non_dev_ppp_fixup(ses);
+			return;
+		} else if (ses->non_dev_ppp_fixup_status == 1) {
+			return;
+		}
+	}
 
 	ap_session_ifup(ses);
 

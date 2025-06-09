@@ -143,8 +143,12 @@ int __export establish_ppp(struct ppp_t *ppp)
 	return 0;
 
 exit_close_chan:
-	if (!ppp->is_non_dev_ppp)
+	if (!ppp->is_non_dev_ppp) {
 		close(ppp->chan_fd);
+	}
+
+	ppp->chan_fd = -1;
+	ppp->chan_hnd.fd = -1;
 
 	return -1;
 }
@@ -242,7 +246,8 @@ exit:
 
 static void destroy_ppp_channel(struct ppp_t *ppp)
 {
-	triton_md_unregister_handler(&ppp->chan_hnd, 1);
+	/* do not close chan_hnd.fd if its non-dev-ppp(chan_hnd.fd == ppp.fd) */
+	triton_md_unregister_handler(&ppp->chan_hnd, !ppp->is_non_dev_ppp);
 	close(ppp->fd);
 	ppp->fd = -1;
 	ppp->chan_fd = -1;
@@ -292,8 +297,10 @@ static void destablish_ppp(struct ppp_t *ppp)
 		return;
 	}
 
-	if (ppp->is_non_dev_ppp)
+	if (ppp->is_non_dev_ppp) {
+		ppp->is_unit_read_enabled = 0;
 		goto skip;
+	}
 
 	if (conf_unit_cache) {
 		struct ifreq ifr;
@@ -561,18 +568,18 @@ cont:
 			}
 		}
 
-                list_for_each_entry(ppp_h, &ppp->unit_handlers, entry) {
-                        if (ppp_h->proto == proto) {
-							if (ppp->is_unit_read_enabled > 0) {
-								ppp_h->recv(ppp_h);
-								if (ppp->fd == -1) {
-									ppp->ses.ctrl->finished(&ppp->ses);
-									return 1;
-								}
-							}
-                                goto cont;
-						}
-                }
+		if (ppp->is_unit_read_enabled > 0) {
+			list_for_each_entry(ppp_h, &ppp->unit_handlers, entry) {
+				if (ppp_h->proto == proto) {
+					ppp_h->recv(ppp_h);
+					if (ppp->fd == -1) {
+						ppp->ses.ctrl->finished(&ppp->ses);
+						return 1;
+					}
+					goto cont;
+				}
+			}
+		}
 
 		lcp_send_proto_rej(ppp, proto);
 		log_ppp_warn("ppp_chan_and_unit_read: discarding unknown packet %x\n", proto);
