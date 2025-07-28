@@ -2,13 +2,8 @@
 #ifndef RT_NAMES_H_
 #define RT_NAMES_H_ 1
 
-#include <asm/types.h>
+#include <stdint.h>
 
-const char *rtnl_rttable_n2a(__u32 id, char *buf, int len);
-const char *rtnl_dsfield_get_name(int id);
-
-int rtnl_rttable_a2n(__u32 *id, const char *arg);
-
-extern int numeric;
+int rtnl_rttable_a2n(uint32_t *id, const char *arg);
 
 #endif

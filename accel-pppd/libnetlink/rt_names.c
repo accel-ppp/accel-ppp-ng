@@ -21,10 +21,10 @@
 #include "rt_names.h"
 #include "utils.h"
 
+#include "triton.h"
+
 #define NAME_MAX_LEN 512
 #define CONFDIR "/etc/iproute2"
-
-int numeric;
 
 struct rtnl_hash_entry {
 	struct rtnl_hash_entry	*next;
@@ -45,11 +45,14 @@ static int fread_id_name(FILE *fp, int *id, char *namebuf)
 		if (*p == '#' || *p == '\n' || *p == 0)
 			continue;
 
-		if (sscanf(p, "0x%x %s\n", id, namebuf) != 2 &&
-				sscanf(p, "0x%x %s #", id, namebuf) != 2 &&
-				sscanf(p, "%d %s\n", id, namebuf) != 2 &&
-				sscanf(p, "%d %s #", id, namebuf) != 2) {
-			strcpy(namebuf, p);
+		/* TODO: Better/safer scanning method required? Maybe regex?*/
+		/* 511 is NAME_MAX_LEN - 1 */
+		if (sscanf(p, "0x%x %511s\n", id, namebuf) != 2 &&
+				sscanf(p, "0x%x %511s #", id, namebuf) != 2 &&
+				sscanf(p, "%d %511s\n", id, namebuf) != 2 &&
+				sscanf(p, "%d %511s #", id, namebuf) != 2) {
+			strncpy(namebuf, p, NAME_MAX_LEN -1);
+			namebuf[NAME_MAX_LEN - 1] = 0;
 			return -1;
 		}
 		return 1;
@@ -57,25 +60,24 @@ static int fread_id_name(FILE *fp, int *id, char *namebuf)
 	return 0;
 }
 
-static void
+static int
 rtnl_hash_initialize(const char *file, struct rtnl_hash_entry **hash, int size)
 {
 	struct rtnl_hash_entry *entry;
 	FILE *fp;
 	int id;
 	char namebuf[NAME_MAX_LEN] = {0};
-	int ret;
+	int ret = 0;
 
 	fp = fopen(file, "r");
 	if (!fp)
-		return;
+		return -1;
 
 	while ((ret = fread_id_name(fp, &id, &namebuf[0]))) {
 		if (ret == -1) {
 			fprintf(stderr, "Database %s is corrupted at %s\n",
 					file, namebuf);
-			fclose(fp);
-			return;
+			break;
 		}
 
 		if (id < 0)
@@ -84,6 +86,7 @@ rtnl_hash_initialize(const char *file, struct rtnl_hash_entry **hash, int size)
 		entry = malloc(sizeof(*entry));
 		if (entry == NULL) {
 			fprintf(stderr, "malloc error: for entry\n");
+			ret = -1;
 			break;
 		}
 		entry->id   = id;
@@ -92,6 +95,8 @@ rtnl_hash_initialize(const char *file, struct rtnl_hash_entry **hash, int size)
 		hash[id & (size - 1)] = entry;
 	}
 	fclose(fp);
+
+	return ret;
 }
 
 static struct rtnl_hash_entry dflt_table_entry  = { .name = "default" };
@@ -111,14 +116,19 @@ static void rtnl_rttable_initialize(void)
 	struct dirent *de;
 	DIR *d;
 	int i;
+	int ret = 0;
 
 	rtnl_rttable_init = 1;
 	for (i = 0; i < 256; i++) {
 		if (rtnl_rttable_hash[i])
 			rtnl_rttable_hash[i]->id = i;
 	}
-	rtnl_hash_initialize(CONFDIR "/rt_tables",
+	ret = rtnl_hash_initialize(CONFDIR "/rt_tables",
 			     rtnl_rttable_hash, 256);
+	if (ret) {
+		fprintf(stderr, "Issue while initializing rtnl hash from rt_tables\n");
+		return;
+	}
 
 	d = opendir(CONFDIR "/rt_tables.d");
 	if (!d)
@@ -132,35 +142,23 @@ static void rtnl_rttable_initialize(void)
 			continue;
 
 		/* only consider filenames ending in '.conf' */
-		len = strlen(de->d_name);
+		len = strnlen(de->d_name, PATH_MAX - 1);
 		if (len <= 5)
 			continue;
-		if (strcmp(de->d_name + len - 5, ".conf"))
+		if (strncmp(de->d_name + len - 5, ".conf", 6))
 			continue;
 
 		snprintf(path, sizeof(path),
 			 CONFDIR "/rt_tables.d/%s", de->d_name);
-		rtnl_hash_initialize(path, rtnl_rttable_hash, 256);
+		ret = rtnl_hash_initialize(path, rtnl_rttable_hash, 256);
+		if (ret) {
+			fprintf(stderr, "Issue while initializing rtnl hash from file \'%s\' - skip the file\n", path);
+		}
 	}
 	closedir(d);
 }
 
-const char *rtnl_rttable_n2a(__u32 id, char *buf, int len)
-{
-	struct rtnl_hash_entry *entry;
-
-	if (!rtnl_rttable_init)
-		rtnl_rttable_initialize();
-	entry = rtnl_rttable_hash[id & 255];
-	while (entry && entry->id != id)
-		entry = entry->next;
-	if (!numeric && entry)
-		return entry->name;
-	snprintf(buf, len, "%u", id);
-	return buf;
-}
-
-int rtnl_rttable_a2n(__u32 *id, const char *arg)
+int rtnl_rttable_a2n(uint32_t *id, const char *arg)
 {
 	static const char *cache;
 	static unsigned long res;
@@ -194,3 +192,29 @@ int rtnl_rttable_a2n(__u32 *id, const char *arg)
 	*id = i;
 	return 0;
 }
+
+/* accel-pppd startup init routine */
+static void rt_names_init(void)
+{
+	rtnl_rttable_initialize();
+}
+
+static void __exit rt_names_exit(void)
+{
+	int i = 0;
+
+	if (!rtnl_rttable_init)
+		return;
+
+	for (i = 0; i < 256; ++i) {
+		struct rtnl_hash_entry *entry = rtnl_rttable_hash[i];
+
+		while (entry) {
+			struct rtnl_hash_entry *e = entry;
+			entry = entry->next;
+			free(e);
+		}
+	}
+}
+
+DEFINE_INIT(1, rt_names_init);

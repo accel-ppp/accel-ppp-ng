@@ -491,10 +491,10 @@ static uint32_t ipvrf_get_table(const char *vrf_name)
 	req.n.nlmsg_type = RTM_GETLINK;
 	req.i.ifi_family = AF_UNSPEC;
 
-	addattr_l(&req.n, 4096, IFLA_IFNAME, vrf_name, strlen(vrf_name));
+	addattr_l(&req.n, 4096, IFLA_IFNAME, vrf_name, strnlen(vrf_name, 512));
 
 	if (rtnl_talk(rth, &req.n, 0, 0, &req.n, NULL, NULL, 0) < 0) {
-    if (errno == ENODEV && !strncmp(vrf_name, "default", 8))
+		if (errno == ENODEV && !strncmp(vrf_name, "default", 8))
 			if (rtnl_rttable_a2n(&tb_id, "main"))
 				log_ppp_error(
 					"BUG: route table \"main\" not found.\n");
