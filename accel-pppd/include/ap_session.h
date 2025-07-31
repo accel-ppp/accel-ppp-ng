@@ -42,6 +42,8 @@ struct ap_session;
 struct backup_data;
 struct rtnl_link_stats;
 
+struct in6_addr;
+
 struct ap_ctrl {
 	struct triton_context_t *ctx;
 	int type;
@@ -124,6 +126,8 @@ struct ap_session
 	int (*non_dev_ppp_fixup)(struct ap_session*);
 	uint32_t vpp_sw_if_index;
 	struct list_head vpp_routes;
+	int (*vpp_nd_recv)(struct ap_session *, const void *, size_t, struct in6_addr *);
+	int (*vpp_dhcpv6_recv)(struct ap_session *, const void *, size_t, struct in6_addr *, unsigned short);
 };
 
 struct ap_session_stat

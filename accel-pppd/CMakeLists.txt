@@ -170,6 +170,8 @@ ADD_EXECUTABLE(accel-pppd
 	utils.c
 	rbtree.c
 
+	accel_iputils.c
+
 	log.c
 	main.c
 )
@@ -179,7 +181,9 @@ IF (HAVE_VPP)
 				   vpputils/vpputils.c
 				   vpputils/vpppoe.c
 				   vpputils/vppiputils.c
+				   vpputils/vppipv6layer.c
 	)
+
 	TARGET_LINK_LIBRARIES(accel-pppd vapiclient vlibapi vlib)
 endif(HAVE_VPP)
 
