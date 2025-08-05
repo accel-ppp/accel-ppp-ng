@@ -59,6 +59,7 @@ static mempool_t uc_pool;
 
 static int ppp_chan_read(struct triton_md_handler_t*);
 static int ppp_unit_read(struct triton_md_handler_t*);
+static int ppp_chan_and_unit_read(struct triton_md_handler_t*);
 static void init_layers(struct ppp_t *);
 static void _free_layers(struct ppp_t *);
 static void start_first_layer(struct ppp_t *);
@@ -73,6 +74,8 @@ void __export ppp_init(struct ppp_t *ppp)
 	ppp->fd = -1;
 	ppp->chan_fd = -1;
 	ppp->unit_fd = -1;
+	ppp->is_unit_read_enabled = 0;
+	ppp->is_vpppoe = 0;
 
 	ap_session_init(&ppp->ses);
 }
@@ -82,25 +85,31 @@ int __export establish_ppp(struct ppp_t *ppp)
 	if (ap_shutdown)
 		return -1;
 
-	/* Open an instance of /dev/ppp and connect the channel to it */
-	if (net->ppp_ioctl(ppp->fd, PPPIOCGCHAN, &ppp->chan_idx) == -1) {
-		log_ppp_error("ioctl(PPPIOCGCHAN): %s\n", strerror(errno));
-		return -1;
-	}
+	if (ppp->is_vpppoe) {
+		/* use fd as chan_fd mostly for sending chan packets */
+		ppp->chan_fd = ppp->fd;
+		net->set_nonblocking(ppp->fd, 1);
+	} else {
+		/* Open an instance of /dev/ppp and connect the channel to it */
+		if (net->ppp_ioctl(ppp->fd, PPPIOCGCHAN, &ppp->chan_idx) == -1) {
+			log_ppp_error("ioctl(PPPIOCGCHAN): %s\n", strerror(errno));
+			return -1;
+		}
 
-	ppp->chan_fd = net->ppp_open();
-	if (ppp->chan_fd < 0) {
-		log_ppp_error("open(chan) /dev/ppp: %s\n", strerror(errno));
-		return -1;
-	}
+		ppp->chan_fd = net->ppp_open();
+		if (ppp->chan_fd < 0) {
+			log_ppp_error("open(chan) /dev/ppp: %s\n", strerror(errno));
+			return -1;
+		}
 
-	fcntl(ppp->chan_fd, F_SETFD, fcntl(ppp->chan_fd, F_GETFD) | FD_CLOEXEC);
+		fcntl(ppp->chan_fd, F_SETFD, fcntl(ppp->chan_fd, F_GETFD) | FD_CLOEXEC);
 
-	net->set_nonblocking(ppp->chan_fd, 1);
+		net->set_nonblocking(ppp->chan_fd, 1);
 
-	if (net->ppp_ioctl(ppp->chan_fd, PPPIOCATTCHAN, &ppp->chan_idx) < 0) {
-		log_ppp_error("ioctl(PPPIOCATTCHAN): %s\n", strerror(errno));
-		goto exit_close_chan;
+		if (net->ppp_ioctl(ppp->chan_fd, PPPIOCATTCHAN, &ppp->chan_idx) < 0) {
+			log_ppp_error("ioctl(PPPIOCATTCHAN): %s\n", strerror(errno));
+			goto exit_close_chan;
+		}
 	}
 
 	init_layers(ppp);
@@ -110,7 +119,12 @@ int __export establish_ppp(struct ppp_t *ppp)
 	}
 
 	ppp->chan_hnd.fd = ppp->chan_fd;
-	ppp->chan_hnd.read = ppp_chan_read;
+
+	/* Use combined read for non-dev-ppp*/
+	if (ppp->is_vpppoe)
+		ppp->chan_hnd.read = ppp_chan_and_unit_read;
+	else 
+		ppp->chan_hnd.read = ppp_chan_read;
 
 	if (conf_unit_preallocate) {
 		if (connect_ppp_channel(ppp))
@@ -129,7 +143,12 @@ int __export establish_ppp(struct ppp_t *ppp)
 	return 0;
 
 exit_close_chan:
-	close(ppp->chan_fd);
+	if (!ppp->is_vpppoe) {
+		close(ppp->chan_fd);
+	}
+
+	ppp->chan_fd = -1;
+	ppp->chan_hnd.fd = -1;
 
 	return -1;
 }
@@ -140,12 +159,12 @@ int __export connect_ppp_channel(struct ppp_t *ppp)
 	struct ifreq ifr;
 
 	if (ppp->unit_fd != -1) {
-		if (setup_ppp_mru(ppp))
+		if (!ppp->is_vpppoe && setup_ppp_mru(ppp))
 			goto exit_close_unit;
 		return 0;
 	}
 
-	if (uc_size) {
+	if (!ppp->is_vpppoe && uc_size) {
 		pthread_mutex_lock(&uc_lock);
 		if (!list_empty(&uc_list)) {
 			uc = list_entry(uc_list.next, typeof(*uc), entry);
@@ -155,7 +174,9 @@ int __export connect_ppp_channel(struct ppp_t *ppp)
 		pthread_mutex_unlock(&uc_lock);
 	}
 
-	if (uc) {
+	if (ppp->is_vpppoe) {
+		ppp->unit_fd = ppp->fd;
+	} else if (uc) {
 		ppp->unit_fd = uc->fd;
 		ppp->ses.unit_idx = uc->unit_idx;
 		mempool_free(uc);
@@ -179,39 +200,45 @@ int __export connect_ppp_channel(struct ppp_t *ppp)
 		}
 	}
 
-	if (net->ppp_ioctl(ppp->chan_fd, PPPIOCCONNECT, &ppp->ses.unit_idx) < 0) {
-		log_ppp_error("ioctl(PPPIOCCONNECT): %s\n", strerror(errno));
-		goto exit_close_unit;
+	if (ppp->is_vpppoe) {
+		ppp->ses.ifindex = -1;
+		ppp->is_unit_read_enabled = 1;
+	} else {
+		if (net->ppp_ioctl(ppp->chan_fd, PPPIOCCONNECT, &ppp->ses.unit_idx) < 0) {
+			log_ppp_error("ioctl(PPPIOCCONNECT): %s\n", strerror(errno));
+			goto exit_close_unit;
+		}
+
+		sprintf(ppp->ses.ifname, "ppp%i", ppp->ses.unit_idx);
+
+		log_ppp_info1("connect: %s <--> %s(%s)\n", ppp->ses.ifname, ppp->ses.ctrl->name, ppp->ses.chan_name);
+
+		memset(&ifr, 0, sizeof(ifr));
+		strcpy(ifr.ifr_name, ppp->ses.ifname);
+		if (net->sock_ioctl(SIOCGIFINDEX, &ifr)) {
+			log_ppp_error("ioctl(SIOCGIFINDEX): %s\n", strerror(errno));
+			goto exit_close_unit;
+		}
+		ppp->ses.ifindex = ifr.ifr_ifindex;
+
+		setup_ppp_mru(ppp);
+
+		ap_session_set_ifindex(&ppp->ses);
+
+		ppp->unit_hnd.fd = ppp->unit_fd;
+		ppp->unit_hnd.read = ppp_unit_read;
+
+		log_ppp_debug("ppp connected\n");
+
+		triton_md_register_handler(ppp->ses.ctrl->ctx, &ppp->unit_hnd);
+		triton_md_enable_handler(&ppp->unit_hnd, MD_MODE_READ);
 	}
-
-	sprintf(ppp->ses.ifname, "ppp%i", ppp->ses.unit_idx);
-
-	log_ppp_info1("connect: %s <--> %s(%s)\n", ppp->ses.ifname, ppp->ses.ctrl->name, ppp->ses.chan_name);
-
-	memset(&ifr, 0, sizeof(ifr));
-	strcpy(ifr.ifr_name, ppp->ses.ifname);
-	if (net->sock_ioctl(SIOCGIFINDEX, &ifr)) {
-		log_ppp_error("ioctl(SIOCGIFINDEX): %s\n", strerror(errno));
-		goto exit_close_unit;
-	}
-	ppp->ses.ifindex = ifr.ifr_ifindex;
-
-	setup_ppp_mru(ppp);
-
-	ap_session_set_ifindex(&ppp->ses);
-
-	ppp->unit_hnd.fd = ppp->unit_fd;
-	ppp->unit_hnd.read = ppp_unit_read;
-
-	log_ppp_debug("ppp connected\n");
-
-	triton_md_register_handler(ppp->ses.ctrl->ctx, &ppp->unit_hnd);
-	triton_md_enable_handler(&ppp->unit_hnd, MD_MODE_READ);
 
 	return 0;
 
 exit_close_unit:
-	close(ppp->unit_fd);
+	if (!ppp->is_vpppoe)
+		close(ppp->unit_fd);
 	ppp->unit_fd = -1;
 exit:
 	return -1;
@@ -219,7 +246,8 @@ exit:
 
 static void destroy_ppp_channel(struct ppp_t *ppp)
 {
-	triton_md_unregister_handler(&ppp->chan_hnd, 1);
+	/* do not close chan_hnd.fd if its non-dev-ppp(chan_hnd.fd == ppp.fd) */
+	triton_md_unregister_handler(&ppp->chan_hnd, !ppp->is_vpppoe);
 	close(ppp->fd);
 	ppp->fd = -1;
 	ppp->chan_fd = -1;
@@ -269,6 +297,11 @@ static void destablish_ppp(struct ppp_t *ppp)
 		return;
 	}
 
+	if (ppp->is_vpppoe) {
+		ppp->is_unit_read_enabled = 0;
+		goto skip;
+	}
+
 	if (conf_unit_cache) {
 		struct ifreq ifr;
 
@@ -312,7 +345,7 @@ skip:
 
 	log_ppp_debug("ppp destablished\n");
 
-	if (uc) {
+	if (!ppp->is_vpppoe && uc) {
 		pthread_mutex_lock(&uc_lock);
 		list_add_tail(&uc->entry, &uc_list);
 		if (++uc_size > conf_unit_cache)
@@ -487,6 +520,69 @@ cont:
 		}
 		lcp_send_proto_rej(ppp, proto);
 		//log_ppp_warn("ppp_unit_read: discarding unknown packet %x\n", proto);
+	}
+
+	mempool_free(ppp->buf);
+	ppp->buf = NULL;
+
+	return 0;
+}
+
+static int ppp_chan_and_unit_read(struct triton_md_handler_t *h) {
+	struct ppp_t *ppp = container_of(h, typeof(*ppp), chan_hnd);
+	struct ppp_handler_t *ppp_h;
+	uint16_t proto;
+
+	if (!ppp->buf)
+		ppp->buf = mempool_alloc(buf_pool);
+
+	while(1) {
+cont:
+		ppp->buf_size = net->read(h->fd, ppp->buf, PPP_BUF_SIZE);
+		if (ppp->buf_size < 0) {
+			if (errno != EAGAIN) {
+				log_ppp_error("ppp_chan_and_unit_read: %s\n", strerror(errno));
+				ap_session_terminate(&ppp->ses, TERM_NAS_ERROR, 1);
+				return 1;
+			}
+			break;
+		}
+
+		if (ppp->buf_size == 0)
+			break;
+
+		if (ppp->buf_size < 2) {
+			log_ppp_error("ppp_chan_and_unit_read: short read %i\n", ppp->buf_size);
+			continue;
+		}
+
+		proto = ntohs(*(uint16_t*)ppp->buf);
+		list_for_each_entry(ppp_h, &ppp->chan_handlers, entry) {
+			if (ppp_h->proto == proto) {
+				ppp_h->recv(ppp_h);
+				if (ppp->fd == -1) {
+					ppp->ses.ctrl->finished(&ppp->ses);
+					return 1;
+				}
+				goto cont;
+			}
+		}
+
+		if (ppp->is_unit_read_enabled > 0) {
+			list_for_each_entry(ppp_h, &ppp->unit_handlers, entry) {
+				if (ppp_h->proto == proto) {
+					ppp_h->recv(ppp_h);
+					if (ppp->fd == -1) {
+						ppp->ses.ctrl->finished(&ppp->ses);
+						return 1;
+					}
+					goto cont;
+				}
+			}
+		}
+
+		lcp_send_proto_rej(ppp, proto);
+		log_ppp_warn("ppp_chan_and_unit_read: discarding unknown packet %x\n", proto);
 	}
 
 	mempool_free(ppp->buf);

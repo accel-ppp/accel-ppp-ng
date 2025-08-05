@@ -76,6 +76,10 @@ void __export ap_session_init(struct ap_session *ses)
 	ses->ifindex = -1;
 	ses->unit_idx = -1;
 	ses->net = net;
+
+	ses->non_dev_ppp_fixup = NULL;
+	ses->vpp_sw_if_index = -1;
+	INIT_LIST_HEAD(&ses->vpp_routes);
 }
 
 void __export ap_session_set_ifindex(struct ap_session *ses)
@@ -149,6 +153,13 @@ void __export ap_session_activate(struct ap_session *ses)
 {
 	if (ap_shutdown)
 		return;
+
+	if (ses->non_dev_ppp_fixup != NULL) {
+		if (ses->non_dev_ppp_fixup(ses)) {
+			ap_session_terminate(ses, TERM_NAS_ERROR, 0);
+			return;
+		}
+	}
 
 	ap_session_ifup(ses);
 
