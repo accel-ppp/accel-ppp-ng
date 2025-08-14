@@ -39,6 +39,14 @@
 #define PPP_CBCP	0xc029	/* Callback Control Protocol */
 #define PPP_EAP		0xc227	/* Extensible Authentication Protocol */
 
+struct ppp_handler_t
+{
+	struct list_head entry;
+	int proto;
+	void (*recv)(struct ppp_handler_t*);
+	void (*recv_proto_rej)(struct ppp_handler_t *h);
+};
+
 struct ppp_t
 {
 	struct ap_session ses;
@@ -63,7 +71,7 @@ struct ppp_t
 	struct list_head layers;
 
 	/** 
- 	 * In non-dev-ppp environment, channel and unit reads would be performed
+	 * In non-dev-ppp environment, channel and unit reads would be performed
 	 * through the same socket and will use the same handler/function.
 	 * This flag sets that additionally unit handlers would be used.
 	 */
@@ -75,6 +83,13 @@ struct ppp_t
 	 * g.e. `establish_ppp()` would not open /dev/ppp
 	 */
 	int is_vpppoe;
+
+	/**
+	 * In a VPP environment, this handler is used to read and process the ICMPv6
+	 * and DHCPv6 packets. This is required for IPv6 client configuration.
+	 * Code of the handler in `vpputils/vppipv6layer.c`
+	 */
+	struct ppp_handler_t vpp_ipv6_hnd;
 };
 
 struct ppp_layer_t;
@@ -100,13 +115,6 @@ struct ppp_layer_t
 	void (*free)(struct ppp_layer_data_t *);
 };
 
-struct ppp_handler_t
-{
-	struct list_head entry;
-	int proto;
-	void (*recv)(struct ppp_handler_t*);
-	void (*recv_proto_rej)(struct ppp_handler_t *h);
-};
 
 void ppp_init(struct ppp_t *ppp);
 int establish_ppp(struct ppp_t *ppp);

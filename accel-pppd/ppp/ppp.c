@@ -581,8 +581,12 @@ cont:
 			}
 		}
 
-		lcp_send_proto_rej(ppp, proto);
-		log_ppp_warn("ppp_chan_and_unit_read: discarding unknown packet %x\n", proto);
+		/* For VPP, clients' IPv6 packets would come through ppp socket,
+		   the handler may not be installed(g.e, because of a configuration).
+		   Doesn't require sending "reject" in this case. */
+		if (proto != PPP_IPV6)
+			lcp_send_proto_rej(ppp, proto);
+		// log_ppp_warn("ppp_chan_and_unit_read: discarding unknown packet %x\n", proto);
 	}
 
 	mempool_free(ppp->buf);
