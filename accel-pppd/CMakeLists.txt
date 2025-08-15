@@ -187,6 +187,10 @@ IF (HAVE_VPP)
 	TARGET_LINK_LIBRARIES(accel-pppd vapiclient vlibapi vlib)
 endif(HAVE_VPP)
 
+IF (DEFINED HAVE_VRF)
+	target_sources(accel-pppd PRIVATE libnetlink/rt_names.c)
+ENDIF (DEFINED HAVE_VRF)
+
 # check if we have getcontext/setcontext
 INCLUDE(CheckFunctionExists)
 CHECK_FUNCTION_EXISTS(getcontext HAVE_GETCONTEXT)
