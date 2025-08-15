@@ -17,6 +17,7 @@
 //#include <linux/if_addr.h>
 //#include <linux/rtnetlink.h>
 #include <linux/fib_rules.h>
+#include <net/if.h>
 
 #include "log.h"
 
@@ -489,7 +490,7 @@ static int ipvrf_get_table(uint32_t *tb_id, const char *vrf_name)
 	req.n.nlmsg_type = RTM_GETLINK;
 	req.i.ifi_family = AF_UNSPEC;
 
-	addattr_l(&req.n, 4096, IFLA_IFNAME, vrf_name, strnlen(vrf_name, 512));
+	addattr_l(&req.n, 4096, IFLA_IFNAME, vrf_name, strnlen(vrf_name, IFNAMSIZ));
 
 	r = rtnl_talk(rth, &req.n, 0, 0, &req.n, NULL, NULL, 0);
 	if (r < 0) {
