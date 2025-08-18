@@ -80,8 +80,11 @@ void __export ap_session_init(struct ap_session *ses)
 	ses->non_dev_ppp_fixup = NULL;
 	ses->vpp_sw_if_index = -1;
 	INIT_LIST_HEAD(&ses->vpp_routes);
+
 	ses->vpp_nd_recv = NULL;
 	ses->vpp_dhcpv6_recv = NULL;
+
+	ses->vrf_name = NULL;
 }
 
 void __export ap_session_set_ifindex(struct ap_session *ses)

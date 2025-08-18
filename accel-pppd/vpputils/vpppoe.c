@@ -110,8 +110,10 @@ __export int vpppoe_set_feature(uint32_t ifindex, int is_enabled, const char *fe
 	if (req == NULL)
 		return -1;
 
-	strlcpy((char *)req->payload.feature_name, feature, 64);
-	strlcpy((char *)req->payload.arc_name, arc, 64);
+	strncpy((char *)req->payload.feature_name, feature, 63);
+	req->payload.feature_name[63] = 0;
+	strncpy((char *)req->payload.arc_name, arc, 63);
+	req->payload.arc_name[63] = 0;
 
 	req->payload.sw_if_index = ifindex;
 	req->payload.enable = is_enabled;

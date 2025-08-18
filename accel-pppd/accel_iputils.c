@@ -72,7 +72,7 @@ __export int accel_ipaddr_del_peer(struct ap_session *ses, int ifindex, in_addr_
 	}
 }
 
-__export int accel_iproute_add(struct ap_session *ses, int ifindex, in_addr_t src, in_addr_t dst, in_addr_t gw, int proto, int mask, uint32_t prio)
+__export int accel_iproute_add(struct ap_session *ses, int ifindex, in_addr_t src, in_addr_t dst, in_addr_t gw, int proto, int mask, uint32_t prio, const char *vrf_name)
 {
 #ifdef HAVE_VPP
 	if (ses->non_dev_ppp_fixup != NULL)
@@ -82,11 +82,11 @@ __export int accel_iproute_add(struct ap_session *ses, int ifindex, in_addr_t sr
 	else
 #endif
 	{
-		return iproute_add(ifindex, src, dst, gw, proto, mask, prio);
+		return iproute_add(ifindex, src, dst, gw, proto, mask, prio, vrf_name);
 	}
 }
 
-__export int accel_iproute_del(struct ap_session *ses, int ifindex, in_addr_t src, in_addr_t dst, in_addr_t gw, int proto, int mask, uint32_t prio)
+__export int accel_iproute_del(struct ap_session *ses, int ifindex, in_addr_t src, in_addr_t dst, in_addr_t gw, int proto, int mask, uint32_t prio, const char *vrf_name)
 {
 #ifdef HAVE_VPP
 	if (ses->non_dev_ppp_fixup != NULL)
@@ -96,11 +96,11 @@ __export int accel_iproute_del(struct ap_session *ses, int ifindex, in_addr_t sr
 	else
 #endif
 	{
-		return iproute_del(ifindex, src, dst, gw, proto, mask, prio);
+		return iproute_del(ifindex, src, dst, gw, proto, mask, prio, vrf_name);
 	}
 }
 
-__export int accel_ip6route_add(struct ap_session *ses, int ifindex, const struct in6_addr *dst, int pref_len, const struct in6_addr *gw, int proto, uint32_t prio)
+__export int accel_ip6route_add(struct ap_session *ses, int ifindex, const struct in6_addr *dst, int pref_len, const struct in6_addr *gw, int proto, uint32_t prio, const char *vrf_name)
 {
 #ifdef HAVE_VPP
 	if (ses->non_dev_ppp_fixup != NULL)
@@ -110,11 +110,11 @@ __export int accel_ip6route_add(struct ap_session *ses, int ifindex, const struc
 	else
 #endif
 	{
-		return ip6route_add(ifindex, dst, pref_len, gw, proto, prio);
+		return ip6route_add(ifindex, dst, pref_len, gw, proto, prio, vrf_name);
 	}
 }
 
-__export int accel_ip6route_del(struct ap_session *ses, int ifindex, const struct in6_addr *dst, int pref_len, const struct in6_addr *gw, int proto, uint32_t prio)
+__export int accel_ip6route_del(struct ap_session *ses, int ifindex, const struct in6_addr *dst, int pref_len, const struct in6_addr *gw, int proto, uint32_t prio, const char *vrf_name)
 {
 #ifdef HAVE_VPP
 	if (ses->non_dev_ppp_fixup != NULL)
@@ -124,7 +124,7 @@ __export int accel_ip6route_del(struct ap_session *ses, int ifindex, const struc
 	else
 #endif
 	{
-		return ip6route_del(ifindex, dst, pref_len, gw, proto, prio);
+		return ip6route_del(ifindex, dst, pref_len, gw, proto, prio, vrf_name);
 	}
 }
 
