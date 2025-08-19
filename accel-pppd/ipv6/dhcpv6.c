@@ -505,6 +505,7 @@ static void dhcpv6_send_reply(struct dhcpv6_packet *req, struct dhcpv6_pd *pd, i
 	if (ses->non_dev_ppp_fixup != NULL) {
 		ipv6layer_unit_dhcpv6_send(ses, reply->hdr, reply->endptr - (void *)reply->hdr, (struct sockaddr *)&req->addr, sizeof(req->addr));
 	} else {
+		req->addr.sin6_scope_id = ses->ifindex;
 		net->sendto(pd->hnd.fd, reply->hdr, reply->endptr - (void *)reply->hdr, 0, (struct sockaddr *)&req->addr, sizeof(req->addr));
 	}
 
@@ -664,6 +665,7 @@ static void dhcpv6_send_reply2(struct dhcpv6_packet *req, struct dhcpv6_pd *pd, 
 	if (ses->non_dev_ppp_fixup != NULL) {
 		ipv6layer_unit_dhcpv6_send(ses, reply->hdr, reply->endptr - (void *)reply->hdr, (struct sockaddr *)&req->addr, sizeof(req->addr));
 	} else {
+		req->addr.sin6_scope_id = ses->ifindex;
 		net->sendto(pd->hnd.fd, reply->hdr, reply->endptr - (void *)reply->hdr, 0, (struct sockaddr *)&req->addr, sizeof(req->addr));
 	}
 
