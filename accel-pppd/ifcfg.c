@@ -98,6 +98,10 @@ void __export ap_session_accounting_started(struct ap_session *ses)
 	if (ses->stop_time)
 		return;
 
+	/* Skip completely ifcfg routine for non-dev-ppp sessions */
+	if (ses->non_dev_ppp_fixup != NULL)
+		goto skip_ifcfg;
+
 	memset(&ifr, 0, sizeof(ifr));
 	strcpy(ifr.ifr_name, ses->ifname);
 
@@ -188,6 +192,8 @@ void __export ap_session_accounting_started(struct ap_session *ses)
 		}
 #endif
 	}
+
+skip_ifcfg:
 
 	ses->ctrl->started(ses);
 

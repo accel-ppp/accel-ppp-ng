@@ -268,21 +268,19 @@ int pppoe_create_vpp_session_interface(struct ap_session *ses) {
 	uint32_t ifindex = -1;
 	int ret = 0;
 
-	if (!ppp->ses.ipv4) {
-		log_error("VPPPOE: VPP requires IPv4 peer address for session initialization");
-		return -1;
-	}
-
-	ret = vpppoe_sync_add_pppoe_interface(conn->addr, &ses->ipv4->peer_addr, conn->sid, &ifindex);
+	ret = vpppoe_sync_add_pppoe_interface(conn->addr, conn->sid, &ifindex);
 	if (ret) {
 		return ret;
 	}
 
 	ses->vpp_sw_if_index = ifindex;
+	vpppoe_dump_interface_name(ifindex, ses->ifname, AP_IFNAME_LEN);
 
 	vpppoe_set_feature(ifindex, 0, "ip4-not-enabled", "ip4-unicast");
 	vpppoe_set_feature(ifindex, 0, "ip6-not-enabled", "ip6-unicast");
-	vpp_iproute_add_del(ses, 1, ifindex, 0, ses->ipv4->peer_addr, 0, ETH_P_ALL, 32, 0);
+	if (ppp->ses.ipv4) {
+		vpp_iproute_add_del(ses, 1, ifindex, 0, ses->ipv4->peer_addr, 0, ETH_P_ALL, 32, 0);
+	}
 
 	return 0;
 }
@@ -471,7 +469,6 @@ static struct pppoe_conn_t *allocate_channel(struct pppoe_serv_t *serv, const ui
 
 #ifdef HAVE_VPP
 	if (serv->is_vpppoe) {
-		conn->ctrl.dont_ifcfg = 1;
 		conn->ppp.is_vpppoe = 1;
 		conn->ppp.ses.non_dev_ppp_fixup = pppoe_create_vpp_session_interface;
 	}
