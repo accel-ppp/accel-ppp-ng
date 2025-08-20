@@ -19,7 +19,9 @@
 #include "ipdb.h"
 #include "iputils.h"
 
-#include "vppipv6layer.h"
+#ifdef HAVE_VPP
+# include "vppipv6layer.h"
+#endif /* HAVE_VPP */
 #include "accel_iputils.h"
 
 #include "memdebug.h"
@@ -228,9 +230,12 @@ static void ipv6_nd_send_ra(struct ipv6_nd_handler_t *h, struct sockaddr_in6 *ds
 	} else
 		endptr = rdnss_addr;
 
+#ifdef HAVE_VPP
 	if (ses->non_dev_ppp_fixup != NULL) {
 		ipv6layer_unit_icmpv6_send(h->ses, buf, endptr - buf, (struct sockaddr *)dst_addr, sizeof(*dst_addr));
-	} else {
+	} else
+#endif /* HAVE_VPP */
+	{
 		net->sendto(h->hnd.fd, buf, endptr - buf, 0, (struct sockaddr *)dst_addr, sizeof(*dst_addr));
 	}
 
@@ -310,7 +315,9 @@ static int ipv6_nd_read(struct triton_md_handler_t *_h)
 	return 0;
 }
 
+#ifdef HAVE_VPP
 static int ipv6_nd_external_process_icmp(struct ap_session *ses, const void *buf, size_t size, struct in6_addr *addr);
+#endif /* HAVE_VPP */
 
 static int ipv6_nd_start(struct ap_session *ses)
 {
@@ -320,9 +327,12 @@ static int ipv6_nd_start(struct ap_session *ses)
 	int val;
 	struct ipv6_nd_handler_t *h;
 
+#ifdef HAVE_VPP
 	if (ses->non_dev_ppp_fixup != NULL) {
 		ipv6layer_unit_enable_nd(ses, ipv6_nd_external_process_icmp);
-	} else {
+	} else
+#endif /* HAVE_VPP */
+	{
 		net->enter_ns();
 		sock = net->socket(AF_INET6, SOCK_RAW, IPPROTO_ICMPV6);
 		net->exit_ns();
@@ -424,6 +434,7 @@ static struct ipv6_nd_handler_t *find_pd(struct ap_session *ses)
 	return NULL;
 }
 
+#ifdef HAVE_VPP
 static int ipv6_nd_external_process_icmp(struct ap_session *ses, const void *buf, size_t size, struct in6_addr *addr)
 {
 	struct ipv6_nd_handler_t *h = find_pd(ses);
@@ -434,6 +445,7 @@ static int ipv6_nd_external_process_icmp(struct ap_session *ses, const void *buf
 
 	return ipv6_nd_process_icmp(h, (const struct icmp6_hdr *)buf, &saddr);
 }
+#endif /* HAVE_VPP */
 
 static void ev_ses_started(struct ap_session *ses)
 {
@@ -460,9 +472,12 @@ static void ev_ses_finishing(struct ap_session *ses)
 	if (h->timer.tpd)
 		triton_timer_del(&h->timer);
 
+#ifdef HAVE_VPP
 	if (ses->non_dev_ppp_fixup != NULL) {
 		ipv6layer_unit_disable_nd(ses);
-	} else {
+	} else
+#endif /* HAVE_VPP */
+	{
 		triton_md_unregister_handler(&h->hnd, 1);
 	}
 
