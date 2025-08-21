@@ -2,7 +2,8 @@ Overview
 --------
 The ACCEL-PPP v1.0 is completly new implementation of PPTP/PPPoE/L2TP/SSTP which was written from scratch.
 Userspace daemon has its own PPP implementation, so it does not uses pppd and one process (multi-threaded) manages all connections.
-ACCEL-PPP uses kernel-mode implementations of pptp/l2tp/pppoe and user-mode of sstp.
+ACCEL-PPP-NG uses kernel-mode implementations of pptp/l2tp/pppoe and user-mode of sstp.
+ACCEL-PPP-NG PPPoE is compatible with VPP.
 
 
 Features
@@ -25,6 +26,7 @@ Features
 15. Command line interface via telnet
 16. SNMP support (master or subagent via AgentX)
 17. Supported SSTP
+18. Supported the control plane for the accelerated VPP dataplane for PPPoE
 
 
 Requirment
@@ -40,10 +42,15 @@ Requirment
 
 
 Compilation and instalation
------------
+---------------------------
+If you want VPP compatible build:
+1. Make sure to download and build VPP with the required patches from [vyos-vpp-patches](https://github.com/vyos/vyos-vpp-patches).
+Patches a compatible with specific [VPP](https://github.com/vyos/vyos-build/blob/current/scripts/package-build/vpp/package.toml) version.
+Skip this step if VPP is not required.
+
 Make sure you have configured kernel headers in /usr/src/linux,
 or specify other location via KDIR.
-1. cd /path/to/accel-ppp-1.3.5
+1. cd /path/to/accel-ppp-ng
 2. mkdir build
 3. cd build
 4. cmake [-DBUILD_DRIVER=FALSE] [-DKDIR=/usr/src/linux] [-DCMAKE_INSTALL_PREFIX=/usr/local] [-DCMAKE_BUILD_TYPE=Release] [-DLOG_PGSQL=FALSE] [-DSHAPER=FALSE] [-DRADIUS=TRUE] [-DNETSNMP=FALSE] ..
@@ -57,8 +64,15 @@ or specify other location via KDIR.
 5. If you want to use chap-secrets for authentication purpose then you need to disable radius support, configure as following:
    cmake -DBUILD_DRIVER=TRUE -DRADIUS=FALSE ..
    of course you can include additional options if needed.
-6. make
-7. make install
+6. If you want to use VPP, add library path
+ ```
+CWD=$(pwd)
+VPP_INCLUDE_PATH="${CWD}/../vpp/vpp/src/vpp-api:${CWD}/../vpp/vpp/src:${CWD}/../vpp/vpp/build-root/build-vpp-native/vpp/CMakeFiles/vpp-api"
+VPP_LIBRARY_PATH="${CWD}/../vpp/vpp/build-root/build-vpp-native/vpp/CMakeFiles/debian/libvppinfra/usr/lib/x86_64-linux-gnu/:${CWD}/../vpp/vpp/build-root/install-vpp-native/vpp/lib/x86_64-linux-gnu/"
+CPATH="${VPP_INCLUDE_PATH}" LIBRARY_PATH="${VPP_LIBRARY_PATH}"
+```
+7. make
+8. make install
 
 
 Configuration
@@ -67,7 +81,7 @@ read man accel-ppp.conf
 
 
 Built-in shaper
---------------
+---------------
 accel-ppp supports tbf and htb based shaper manager. It also supports clsact policer manager.
 To enable it uncomment shaper in [modules] section.
 It accepts radius attributes in various formats: rate, down-rate/up-rate and cisco-like. Values have to be in kilobits except cisco-like.
@@ -175,7 +189,5 @@ Warning !!!
 
 Contacts
 --------
-http://accel-ppp.org/
-mail: contact@accel-ppp.org
-ICQ: 337258064
-Jabber: dima@accel-ppp.org
+https://www.accel-ppp.io/
+mail: maintainers@vyos.io
