@@ -2,12 +2,13 @@
 /*
  * Copyright (c) 2025 by VyOS Networks
  * Andrii Melnychenko a.melnychenko@vyos.io
-*/
+ */
 
 #include <vapi/vapi.h>
 #include <vapi/vpe.api.vapi.h>
 #include <vapi/pppoe.api.vapi.h>
 #include <vapi/feature.api.vapi.h>
+#include <vapi/interface.api.vapi.h>
 
 #include <linux/if_ether.h>
 
@@ -21,6 +22,7 @@
 DEFINE_VAPI_MSG_IDS_VPE_API_JSON
 DEFINE_VAPI_MSG_IDS_PPPOE_API_JSON
 DEFINE_VAPI_MSG_IDS_FEATURE_API_JSON
+DEFINE_VAPI_MSG_IDS_INTERFACE_API_JSON
 
 static vapi_error_e vpppoe_s_session_add_reply_callback(struct vapi_ctx_s *ctx,
 														void *callback_ctx,
@@ -38,7 +40,7 @@ static vapi_error_e vpppoe_s_session_add_reply_callback(struct vapi_ctx_s *ctx,
 	return rv;
 }
 
-__export int vpppoe_sync_add_pppoe_interface(uint8_t *client_mac, in_addr_t *client_ip, uint16_t session_id, uint32_t *sw_ifindex)
+__export int vpppoe_sync_add_pppoe_interface(uint8_t *client_mac, uint16_t session_id, uint32_t *sw_ifindex)
 {
 	vapi_error_e err;
 
@@ -48,7 +50,6 @@ __export int vpppoe_sync_add_pppoe_interface(uint8_t *client_mac, in_addr_t *cli
 	}
 
 	req->payload.client_ip.af = ADDRESS_IP4;
-	memcpy(req->payload.client_ip.un.ip4, client_ip, sizeof(*client_ip));
 	memcpy(req->payload.client_mac, client_mac, ETH_ALEN);
 
 	req->payload.is_add = 1;
@@ -123,4 +124,47 @@ __export int vpppoe_set_feature(uint32_t ifindex, int is_enabled, const char *fe
 	vpp_unlock();
 
 	return err;
+}
+
+typedef struct vpppoe_dump_interface_name_ctx_t
+{
+	char *name;
+	size_t size;
+} vpppoe_dump_interface_name_ctx_t;
+
+static vapi_error_e vpppoe_dump_interface_name_callback(struct vapi_ctx_s *ctx,
+											void *callback_ctx,
+											vapi_error_e rv,
+											bool is_last,
+											vapi_payload_sw_interface_details *reply)
+{
+	if (callback_ctx != NULL && reply != NULL && rv == VAPI_OK) {
+		vpppoe_dump_interface_name_ctx_t *ctx = (vpppoe_dump_interface_name_ctx_t *)callback_ctx;
+		strncpy(ctx->name, reply->interface_name, ctx->size > 64 ? 64 : ctx->size);
+		ctx->name[(ctx->size > 64 ? 64 : ctx->size) - 1] = 0;
+	}
+
+	return rv;
+}
+
+__export int vpppoe_dump_interface_name(uint32_t ifindex, char *name, size_t size)
+{
+	vapi_error_e err;
+
+	if (name == NULL || !size) {
+		return -1;
+	}
+
+	/* Allocated in stack - works only with sync VPP client */
+	vpppoe_dump_interface_name_ctx_t ctx = {name, size};
+
+	vapi_msg_sw_interface_dump *req = vapi_alloc_sw_interface_dump(vpp_get_vapi(), 0);
+
+	req->payload.sw_if_index = ifindex;
+
+	vpp_lock();
+	err = vapi_sw_interface_dump(vpp_get_vapi(), req, vpppoe_dump_interface_name_callback, &ctx);
+	vpp_unlock();
+
+	return err != VAPI_OK;
 }
