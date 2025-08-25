@@ -54,7 +54,7 @@ jobs:
       - name: Rename accel-ppp deb package
         working-directory: ./build
         run: >
-          mv -v accel-ppp.deb 
+          mv -v accel-ppp-ng.deb 
           accel-ppp_`git describe --tags --long | sed 's/^v//' | sed 's/-/+/' | sed 's/-/~/'`-1+${{ matrix.pkg-distro }}_`uname -m`.deb
       - name: Install debian package
         working-directory: ./build
@@ -150,7 +150,7 @@ jobs:
       - name: Rename accel-ppp deb package
         working-directory: ./build
         run: >
-          mv -v accel-ppp.deb 
+          mv -v accel-ppp-ng.deb 
           accel-ppp_`git describe --tags --long | sed 's/^v//' | sed 's/-/+/' | sed 's/-/~/'`-1+${{ env.DISTRO }}_${{ env.UNAME_M }}.deb
       - name: Install debian package
         working-directory: ./build
