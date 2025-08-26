@@ -54,7 +54,7 @@ jobs:
       - name: Rename accel-ppp deb package
         working-directory: ./build
         run: >
-          mv -v accel-ppp.deb 
+          mv -v accel-ppp-ng.deb 
           accel-ppp_`git describe --tags --long | sed 's/^v//' | sed 's/-/+/' | sed 's/-/~/'`-1+${{ matrix.pkg-distro }}_`uname -m`.deb
       - name: Install debian package
         working-directory: ./build
@@ -96,13 +96,14 @@ jobs:
     steps:
       - name: Set distro-specific vars
         run: >
+          BUILD_MODULES=TRUE;
           HEADERS_SUFFIX=`uname -m | sed s/aarch64/arm64/ | sed s/x86_64/amd64/`;
           DISTRO=`echo ${{ matrix.distro }} |  sed 's/://'`;
           case "${{ matrix.distro }}" in
           debian:trixie) DISTRO=debian13; CPACK_TYPE=Debian13 ;;
           debian:12) DISTRO=debian12; CPACK_TYPE=Debian12 ;;
           debian:11) CPACK_TYPE=Debian11 ;;
-          ubuntu:devel) CPACK_TYPE=Ubuntu24 ; HEADERS_SUFFIX=generic ;;
+          ubuntu:devel) CPACK_TYPE=Ubuntu24 ; HEADERS_SUFFIX=generic ; BUILD_MODULES=FALSE ;;
           ubuntu:24.04) CPACK_TYPE=Ubuntu24 ; HEADERS_SUFFIX=generic ;;
           ubuntu:22.04) CPACK_TYPE=Ubuntu22 ; HEADERS_SUFFIX=generic ;;
           ubuntu:20.04) CPACK_TYPE=Ubuntu20 ; HEADERS_SUFFIX=generic ;;
@@ -111,6 +112,7 @@ jobs:
           echo DISTRO=$DISTRO >> $GITHUB_ENV;
           echo CPACK_TYPE=$CPACK_TYPE >> $GITHUB_ENV;
           echo UNAME_M=`uname -m` >> $GITHUB_ENV;
+          echo BUILD_MODULES=$BUILD_MODULES >> $GITHUB_ENV;
           cat $GITHUB_ENV
       - name: Install build tools
         run: >
@@ -134,7 +136,7 @@ jobs:
       - name: cmake
         working-directory: ./build
         run: >
-          cmake -DBUILD_IPOE_DRIVER=TRUE -DBUILD_VLAN_MON_DRIVER=TRUE -DCMAKE_INSTALL_PREFIX=/usr 
+          cmake -DBUILD_IPOE_DRIVER=${{ env.BUILD_MODULES }} -DBUILD_VLAN_MON_DRIVER=${{ env.BUILD_MODULES }} -DCMAKE_INSTALL_PREFIX=/usr 
           -DKDIR=/usr/src/linux-headers-${{ env.KERNEL_NAME }}
           -DMODULES_KDIR=${{ env.KERNEL_NAME }}
           -DLUA=TRUE -DSHAPER=FALSE -DRADIUS=TRUE 
@@ -148,7 +150,7 @@ jobs:
       - name: Rename accel-ppp deb package
         working-directory: ./build
         run: >
-          mv -v accel-ppp.deb 
+          mv -v accel-ppp-ng.deb 
           accel-ppp_`git describe --tags --long | sed 's/^v//' | sed 's/-/+/' | sed 's/-/~/'`-1+${{ env.DISTRO }}_${{ env.UNAME_M }}.deb
       - name: Install debian package
         working-directory: ./build
