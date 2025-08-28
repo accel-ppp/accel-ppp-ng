@@ -41,6 +41,7 @@
 #include "vpputils.h"
 #include "vpppoe.h"
 #include "vppiputils.h"
+#include "new_link_event.h"
 
 #define SID_MAX 65536
 
@@ -142,6 +143,14 @@ static unsigned long *sid_map;
 static unsigned long *sid_ptr;
 static int sid_idx;
 
+struct nnle_handler_t pppoe_nnle_handler;
+LIST_HEAD(monitored_link_list);
+
+static void monitored_link_list_add(const char *name, const char *opt);
+static void monitored_link_list_del(const char *name);
+struct monitored_link_list_entry_t * monitored_link_list_find(const char *name);
+static void pppoe_on_vpp_connection_lost(struct vpp_handler_t *h);
+
 static uint8_t bc_addr[ETH_ALEN] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
 static void pppoe_send_PADT(struct pppoe_conn_t *conn);
@@ -236,7 +245,7 @@ int pppoe_terminate(struct ap_session *ses, int hard) {
 	struct ppp_t *ppp = container_of(ses, typeof(*ppp), ses);
 	struct pppoe_conn_t *conn = container_of(ppp, typeof(*conn), ppp);
 
-	if (ppp->is_vpppoe) {
+	if (ppp->is_vpppoe && !conn->serv->is_vpppoe_lost) {
 		vpp_iproute_flush(ses);
 		vpppoe_sync_del_pppoe_interface(conn->addr, conn->sid);
 	}
@@ -267,6 +276,9 @@ int pppoe_create_vpp_session_interface(struct ap_session *ses) {
 	struct pppoe_conn_t *conn = container_of(ppp, typeof(*conn), ppp);
 	uint32_t ifindex = -1;
 	int ret = 0;
+
+	if (conn->serv->is_vpppoe_lost)
+		return -1;
 
 	ret = vpppoe_sync_add_pppoe_interface(conn->addr, conn->sid, &ifindex);
 	if (ret) {
@@ -1543,13 +1555,17 @@ static void __pppoe_server_start(const char *ifname, const char *opt, void *cli,
 
 	pthread_rwlock_rdlock(&serv_lock);
 	list_for_each_entry(serv, &serv_list, entry) {
-		if (serv->net == net && !strcmp(serv->ifname, ifname)) {
+		if (serv->net == net && !strcmp(serv->ifname, ifname) && !serv->stopping) {
 			if (cli)
 				cli_send(cli, "error: already exists\r\n");
 			pthread_rwlock_unlock(&serv_lock);
 			return;
 		}
 	}
+	pthread_rwlock_unlock(&serv_lock);
+
+	pthread_rwlock_wrlock(&serv_lock);
+	monitored_link_list_add(ifname, opt);
 	pthread_rwlock_unlock(&serv_lock);
 
 	if (vid && !vlan_mon && vlan_mon_check_busy(parent_ifindex, vid))
@@ -1567,11 +1583,14 @@ static void __pppoe_server_start(const char *ifname, const char *opt, void *cli,
 
 	strncpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
 
-	serv->is_vpppoe = is_vpppoe;
-
 #ifdef HAVE_VPP
-	if (serv->is_vpppoe)
+	serv->is_vpppoe = is_vpppoe;
+	serv->is_vpppoe_lost = 0;
+	if (serv->is_vpppoe) {
+		serv->vpp_handler.on_vpp_connection_lost = pppoe_on_vpp_connection_lost;
+		vpp_register_handler(&serv->vpp_handler);
 		vpp_get();
+	}
 #endif /* HAVE_VPP */
 
 	if (net->sock_ioctl(SIOCGIFFLAGS, &ifr)) {
@@ -1667,8 +1686,10 @@ static void __pppoe_server_start(const char *ifname, const char *opt, void *cli,
 out_err:
 
 #ifdef HAVE_VPP
-	if (serv->is_vpppoe)
+	if (serv->is_vpppoe) {
+		vpp_unregister_handler(&serv->vpp_handler);
 		vpp_put();
+	}
 #endif /* HAVE_VPP */
 
 	_free(serv);
@@ -1725,8 +1746,10 @@ void pppoe_server_free(struct pppoe_serv_t *serv)
 	triton_context_unregister(&serv->ctx);
 
 #ifdef HAVE_VPP
-	if (serv->is_vpppoe)
+	if (serv->is_vpppoe) {
+		vpp_unregister_handler(&serv->vpp_handler);
 		vpp_put();
+	}
 #endif /* HAVE_VPP */
 
 	_free(serv->ifname);
@@ -1737,9 +1760,13 @@ void pppoe_server_stop(const char *ifname)
 {
 	struct pppoe_serv_t *serv;
 
+	pthread_rwlock_wrlock(&serv_lock);
+	monitored_link_list_del(ifname);
+	pthread_rwlock_unlock(&serv_lock);
+
 	pthread_rwlock_rdlock(&serv_lock);
 	list_for_each_entry(serv, &serv_list, entry) {
-		if (strcmp(serv->ifname, ifname))
+		if (strcmp(serv->ifname, ifname) || serv->stopping)
 			continue;
 		triton_context_call(&serv->ctx, (triton_event_func)_server_stop, serv);
 		break;
@@ -2223,6 +2250,101 @@ static void load_interfaces()
 	}
 }
 
+static void monitored_link_list_add(const char *name, const char *opt)
+{
+	struct monitored_link_list_entry_t *s;
+
+	if (name == NULL) {
+		return;
+	}
+
+	s = monitored_link_list_find(name);
+	/* TODO: update opt? */
+	/* already exists */
+	if (s != NULL)
+		return;
+
+	s = malloc(sizeof(*s));
+	s->name = strdup(name);
+	s->opt = NULL;
+	if (opt)
+		s->opt = strdup(opt);
+
+	list_add_tail(&s->entry, &monitored_link_list);
+}
+
+static void monitored_link_list_del(const char *name)
+{
+	struct monitored_link_list_entry_t *s;
+
+	s = monitored_link_list_find(name);
+	if (s == NULL)
+		return;
+
+	list_del(&s->entry);
+	free(s->name);
+	if (s->opt)
+		free(s->opt);
+
+	free(s);
+}
+
+struct monitored_link_list_entry_t * monitored_link_list_find(const char *name)
+{
+	struct monitored_link_list_entry_t *s;
+
+	if (name == NULL)
+		return NULL;
+
+	list_for_each_entry(s, &monitored_link_list, entry) {
+		if (!strncmp(name, s->name, IFNAMSIZ - 1)) {
+			return s;
+		}
+	}
+
+	return NULL;
+}
+
+static void pppoe_on_add_link(const char *name)
+{
+	pthread_rwlock_rdlock(&serv_lock);
+	struct monitored_link_list_entry_t *s = monitored_link_list_find(name);
+	pthread_rwlock_unlock(&serv_lock);
+	if (s != NULL) {
+		__pppoe_server_start(s->name, s->opt, NULL, -1, 0, 0);
+		log_info1("pppoe: new link event caught, starting the service on: %s with options \"%s\"\n", s->name, s->opt);
+	}
+}
+
+static void pppoe_on_del_link(const char *name)
+{
+	/* TODO: it is a copy of pppoe_server_stop() without monitored delete */
+	struct pppoe_serv_t *serv;
+
+	pthread_rwlock_rdlock(&serv_lock);
+	list_for_each_entry(serv, &serv_list, entry) {
+		if (strcmp(serv->ifname, name) || serv->stopping)
+			continue;
+		triton_context_call(&serv->ctx, (triton_event_func)_server_stop, serv);
+		log_warn("pppoe: delete link event caught, stopping the service on: %s ifindex %d\n", serv->ifname, serv->ifindex);
+		break;
+	}
+	pthread_rwlock_unlock(&serv_lock);
+}
+
+#ifdef HAVE_VPP
+static void pppoe_on_vpp_connection_lost(struct vpp_handler_t *h)
+{
+	struct pppoe_serv_t *serv = container_of(h, typeof(*serv), vpp_handler);
+	/* skip all vpp calls for sessions on this service */
+	serv->is_vpppoe_lost = 1;
+
+	/* terminate pppoe service */
+	triton_context_call(&serv->ctx, (triton_event_func)_server_stop, serv);
+	log_warn("pppoe: VPP connection lost, stopping the service on: %s ifindex %d\n", serv->ifname, serv->ifindex);
+}
+#endif /* HAVE_VPP */
+
 static void pppoe_init(void)
 {
 	int fd;
@@ -2254,6 +2376,10 @@ static void pppoe_init(void)
 	load_config();
 
 	connlimit_loaded = triton_module_loaded("connlimit");
+
+	pppoe_nnle_handler.on_new_link = pppoe_on_add_link;
+	pppoe_nnle_handler.on_del_link = pppoe_on_del_link;
+	nnle_add_handler(&pppoe_nnle_handler);
 
 	triton_event_register_handler(EV_CONFIG_RELOAD, (triton_event_func)load_config);
 }

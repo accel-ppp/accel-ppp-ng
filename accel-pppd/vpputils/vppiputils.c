@@ -16,6 +16,8 @@
 
 DEFINE_VAPI_MSG_IDS_IP_API_JSON
 
+extern void vpp_check_error(vapi_error_e err);
+
 struct vpp_route_t {
 	struct list_head entry;
 
@@ -86,14 +88,26 @@ static vapi_error_e vpp_ip_ro_cb(struct vapi_ctx_s *ctx,
 								 bool is_last,
 								 vapi_payload_ip_route_add_del_reply *reply)
 {
-	return VAPI_OK;
+	return rv;
 }
 
 static int vpp_iproute(int is_add, int ifindex,
 								 in_addr_t dst, int mask)
 {
-	vapi_error_e verr;
-	vapi_msg_ip_route_add_del *req = vapi_alloc_ip_route_add_del(vpp_get_vapi(), 1);
+	vapi_error_e err = -1;
+	struct vapi_ctx_s *ctx;
+
+	vpp_lock();
+
+	ctx = vpp_get_vapi();
+	if (ctx == NULL) {
+		goto exit;
+	}
+
+	vapi_msg_ip_route_add_del *req = vapi_alloc_ip_route_add_del(ctx, 1);
+	if (req == NULL) {
+		goto exit;
+	}
 
 	req->payload.is_add = is_add;
 	req->payload.is_multipath = 0;
@@ -102,11 +116,12 @@ static int vpp_iproute(int is_add, int ifindex,
 	req->payload.route.prefix.len = mask;
 	req->payload.route.paths[0].sw_if_index = ifindex;
 
-	vpp_lock();
-	verr = vapi_ip_route_add_del(vpp_get_vapi(), req, vpp_ip_ro_cb, NULL);
-	vpp_unlock();
+	err = vapi_ip_route_add_del(ctx, req, vpp_ip_ro_cb, NULL);
+	vpp_check_error(err);
 
-	return !(verr == VAPI_OK);
+exit:
+	vpp_unlock();
+	return err;
 }
 
 __export int vpp_iproute_add_del(struct ap_session *ses, int is_add, int ifindex, in_addr_t src,
@@ -124,8 +139,20 @@ __export int vpp_iproute_add_del(struct ap_session *ses, int is_add, int ifindex
 
 static int vpp_ip6route(int is_add, int ifindex, const struct in6_addr *dst, int pref_len)
 {
-	vapi_error_e verr;
-	vapi_msg_ip_route_add_del *req = vapi_alloc_ip_route_add_del(vpp_get_vapi(), 1);
+	vapi_error_e err = -1;;
+	struct vapi_ctx_s *ctx;
+
+	vpp_lock();
+
+	ctx = vpp_get_vapi();
+	if (ctx == NULL) {
+		goto exit;
+	}
+
+	vapi_msg_ip_route_add_del *req = vapi_alloc_ip_route_add_del(ctx, 1);
+	if (req == NULL) {
+		goto exit;
+	}
 
 	req->payload.is_add = is_add;
 	req->payload.is_multipath = 0;
@@ -134,11 +161,12 @@ static int vpp_ip6route(int is_add, int ifindex, const struct in6_addr *dst, int
 	req->payload.route.prefix.len = pref_len;
 	req->payload.route.paths[0].sw_if_index = ifindex;
 
-	vpp_lock();
-	verr = vapi_ip_route_add_del(vpp_get_vapi(), req, vpp_ip_ro_cb, NULL);
-	vpp_unlock();
+	err = vapi_ip_route_add_del(ctx, req, vpp_ip_ro_cb, NULL);
+	vpp_check_error(err);
 
-	return !(verr == VAPI_OK);
+exit:
+	vpp_unlock();
+	return err;
 }
 
 __export int vpp_ip6route_add_del(struct ap_session *ses, int is_add, int ifindex, const struct in6_addr *dst, int pref_len, const struct in6_addr *gw, int proto, uint32_t prio)

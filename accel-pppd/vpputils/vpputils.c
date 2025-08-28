@@ -21,15 +21,18 @@ struct vpp_connect_t
 	vapi_ctx_t vapi;
 	int rfcounter;
 	pthread_mutex_t lock_vpp;
+
+	struct list_head vpp_handlers;
 } vpp_connect;
 
 const char vpp_app_name[] = "accel-vpp";
 
 static void vpppoe_connect_to_vpp()
 {
+	vpp_connect.vapi = NULL;
 	vapi_error_e verr = vapi_ctx_alloc(&vpp_connect.vapi);
 
-	if (verr != VAPI_OK) {
+	if (verr != VAPI_OK || vpp_connect.vapi == NULL) {
 		vpp_connect.vapi = NULL;
 		return;
 	}
@@ -40,19 +43,21 @@ static void vpppoe_connect_to_vpp()
 		vpp_connect.vapi = NULL;
 		return;
 	}
-
-	pthread_mutex_init(&vpp_connect.lock_vpp, NULL);
 }
 
 void vpppoe_disconnect_from_vpp()
 {
-	pthread_mutex_destroy(&vpp_connect.lock_vpp);
-	vapi_disconnect(vpp_connect.vapi);
-	vapi_ctx_free(vpp_connect.vapi);
-	vpp_connect.vapi = NULL;
+	if (vpp_connect.vapi != NULL) {
+		vapi_disconnect(vpp_connect.vapi);
+		vapi_ctx_free(vpp_connect.vapi);
+		vpp_connect.vapi = NULL;
+	}
 }
 
 struct vapi_ctx_s * vpp_get_vapi() {
+	if (vpp_connect.vapi == NULL && __sync_fetch_and_and(&vpp_connect.rfcounter, 1)) {
+		vpppoe_connect_to_vpp();
+	}
 	return vpp_connect.vapi;
 }
 
@@ -66,18 +71,49 @@ void vpp_unlock() {
 
 void __export vpp_get()
 {
+	vpp_lock();
 	int rfc = __sync_fetch_and_add(&vpp_connect.rfcounter, 1);
 	if (!rfc)
 		vpppoe_connect_to_vpp();
+	vpp_unlock();
 }
 
 void __export vpp_put()
 {
+	vpp_lock();
 	int rfc = __sync_sub_and_fetch(&vpp_connect.rfcounter, 1);
 	if (!rfc)
 		vpppoe_disconnect_from_vpp();
+	vpp_unlock();
 }
 
+void __export vpp_register_handler(struct vpp_handler_t *h)
+{
+	if (h->on_vpp_connection_lost)
+		list_add_tail(&h->entry, &vpp_connect.vpp_handlers);
+}
+
+void __export vpp_unregister_handler(struct vpp_handler_t *h)
+{
+	list_del(&h->entry);
+}
+
+void vpp_call_on_vpp_connection_lost()
+{
+	struct vpp_handler_t *h = NULL;
+	list_for_each_entry(h, &vpp_connect.vpp_handlers, entry) {
+		if (h->on_vpp_connection_lost)
+			h->on_vpp_connection_lost(h);
+	}
+}
+
+void vpp_check_error(vapi_error_e err)
+{
+	if (vpp_connect.vapi && err >= VAPI_ECON_FAIL) {
+		vpppoe_disconnect_from_vpp();
+		vpp_call_on_vpp_connection_lost();
+	}
+}
 
 static void vpppoe_load_config(void)
 {
@@ -91,6 +127,8 @@ static void vpppoe_load_config(void)
 static void vpppoe_init()
 {
 	memset(&vpp_connect, 0, sizeof(vpp_connect));
+	pthread_mutex_init(&vpp_connect.lock_vpp, NULL);
+	INIT_LIST_HEAD(&vpp_connect.vpp_handlers);
 
 	vpppoe_load_config();
 

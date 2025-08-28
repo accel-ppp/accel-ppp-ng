@@ -161,6 +161,7 @@ ADD_EXECUTABLE(accel-pppd
 	libnetlink/iputils.c
 	libnetlink/genl.c
 	libnetlink/ipset.c
+	libnetlink/new_link_event.c
 
 	pwdb.c
 	ipdb.c
