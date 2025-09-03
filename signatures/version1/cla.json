@@ -1,3 +1,20 @@
 {
-   "signedContributors": []
+  "signedContributors": [
+    {
+      "name": "evgsentrium",
+      "id": 41889972,
+      "comment_id": 3248593504,
+      "created_at": "2025-09-03T10:09:06Z",
+      "repoId": 982923198,
+      "pullRequestNo": 15
+    },
+    {
+      "name": "evgsentrium",
+      "id": 41889972,
+      "comment_id": 3248785595,
+      "created_at": "2025-09-03T11:08:09Z",
+      "repoId": 982923198,
+      "pullRequestNo": 15
+    }
+  ]
 }
