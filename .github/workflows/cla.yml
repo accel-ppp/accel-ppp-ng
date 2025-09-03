@@ -23,6 +23,6 @@ jobs:
         with:
           path-to-signatures: 'signatures/version1/cla.json'
           path-to-document: 'https://github.com/accel-ppp/accel-ppp-ng/blob/current/CLA.md'
-          branch: 'current'
+          branch: 'cla'
           allowlist: 'pre-commit-ci,dependabot,codecov,mergify,netlify'
           lock-pullrequest-aftermerge: false
