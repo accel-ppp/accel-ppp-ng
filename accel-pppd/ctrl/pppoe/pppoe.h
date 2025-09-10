@@ -105,6 +105,7 @@ struct pppoe_serv_t
 	unsigned int vlan_mon:1;
 	unsigned int is_vpppoe:1;
 	unsigned int is_vpppoe_lost:1;
+	unsigned int stop_cause;
 
 #ifdef HAVE_VPP
 	struct vpp_handler_t vpp_handler;

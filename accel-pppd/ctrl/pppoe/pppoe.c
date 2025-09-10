@@ -1583,6 +1583,7 @@ static void __pppoe_server_start(const char *ifname, const char *opt, void *cli,
 
 	strncpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
 
+	serv->stop_cause = TERM_ADMIN_RESET;
 #ifdef HAVE_VPP
 	serv->is_vpppoe = is_vpppoe;
 	serv->is_vpppoe_lost = 0;
@@ -1697,7 +1698,7 @@ out_err:
 
 static void _conn_stop(struct pppoe_conn_t *conn)
 {
-	ap_session_terminate(&conn->ppp.ses, TERM_ADMIN_RESET, 0);
+	ap_session_terminate(&conn->ppp.ses, conn->serv->stop_cause, 0);
 }
 
 void _server_stop(struct pppoe_serv_t *serv)
@@ -2312,7 +2313,7 @@ static void pppoe_on_add_link(const char *name)
 	pthread_rwlock_unlock(&serv_lock);
 	if (s != NULL) {
 		__pppoe_server_start(s->name, s->opt, NULL, -1, 0, 0);
-		log_info1("pppoe: new link event caught, starting the service on: %s with options \"%s\"\n", s->name, s->opt);
+		log_info1("pppoe: new link event received, starting the service on: %s with options \"%s\"\n", s->name, s->opt);
 	}
 }
 
@@ -2325,8 +2326,9 @@ static void pppoe_on_del_link(const char *name)
 	list_for_each_entry(serv, &serv_list, entry) {
 		if (strcmp(serv->ifname, name) || serv->stopping)
 			continue;
+		serv->stop_cause = TERM_NAS_ERROR;
 		triton_context_call(&serv->ctx, (triton_event_func)_server_stop, serv);
-		log_warn("pppoe: delete link event caught, stopping the service on: %s ifindex %d\n", serv->ifname, serv->ifindex);
+		log_warn("pppoe: delete link event received, stopping the service on: %s ifindex %d\n", serv->ifname, serv->ifindex);
 		break;
 	}
 	pthread_rwlock_unlock(&serv_lock);
@@ -2340,6 +2342,7 @@ static void pppoe_on_vpp_connection_lost(struct vpp_handler_t *h)
 	serv->is_vpppoe_lost = 1;
 
 	/* terminate pppoe service */
+	serv->stop_cause = TERM_NAS_ERROR;
 	triton_context_call(&serv->ctx, (triton_event_func)_server_stop, serv);
 	log_warn("pppoe: VPP connection lost, stopping the service on: %s ifindex %d\n", serv->ifname, serv->ifindex);
 }
