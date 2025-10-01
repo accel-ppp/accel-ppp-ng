@@ -183,6 +183,7 @@ IF (HAVE_VPP)
 				   vpputils/vpppoe.c
 				   vpputils/vppiputils.c
 				   vpputils/vppipv6layer.c
+				   vpputils/vpppolicer.c
 	)
 
 	TARGET_LINK_LIBRARIES(accel-pppd vapiclient vlibapi vlib)

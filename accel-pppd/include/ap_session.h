@@ -129,6 +129,11 @@ struct ap_session
 	struct list_head vpp_routes;
 	int (*vpp_nd_recv)(struct ap_session *, const void *, size_t, struct in6_addr *);
 	int (*vpp_dhcpv6_recv)(struct ap_session *, const void *, size_t, struct in6_addr *, unsigned short);
+
+	uint32_t vpppolicer_down;
+	uint64_t vpppolicer_down_burst;
+	uint32_t vpppolicer_up;
+	uint64_t vpppolicer_up_burst;
 };
 
 struct ap_session_stat
