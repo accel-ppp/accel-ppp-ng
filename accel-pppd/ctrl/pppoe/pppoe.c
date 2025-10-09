@@ -39,6 +39,7 @@
 #include "vpputils.h"
 #include "vpppoe.h"
 #include "vppiputils.h"
+#include "vpppolicer.h"
 #include "new_link_event.h"
 
 #define SID_MAX 65536
@@ -245,6 +246,7 @@ int pppoe_terminate(struct ap_session *ses, int hard) {
 
 	if (ppp->is_vpppoe && !conn->serv->is_vpppoe_lost) {
 		vpp_iproute_flush(ses);
+		vpppolicer_remove_limiter(ses);
 		vpppoe_sync_del_pppoe_interface(conn->addr, conn->sid);
 	}
 

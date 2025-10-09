@@ -21,6 +21,8 @@
 #include "tc_core.h"
 #include "libnetlink.h"
 
+#include "vpppolicer.h"
+
 static int qdisc_tbf(struct qdisc_opt *qopt, struct nlmsghdr *n)
 {
 	struct tc_tbf_qopt opt;
@@ -540,6 +542,16 @@ static int remove_htb_ifb(struct rtnl_handle *rth, int ifindex, int priority)
 
 int install_limiter(struct ap_session *ses, int down_speed, int down_burst, int up_speed, int up_burst, int idx)
 {
+#ifdef HAVE_VPP
+	if (ses->non_dev_ppp_fixup != NULL) {
+		down_speed = down_speed * 1000 / 8;
+		down_burst = down_burst ? down_burst : conf_down_burst_factor * down_speed;
+		up_speed = up_speed * 1000 / 8;
+		up_burst = up_burst ? up_burst : conf_up_burst_factor * up_speed;
+		return vpppolicer_install_limiter(ses, down_speed, down_burst, up_speed, up_burst);
+	}
+#endif
+
 	struct rtnl_handle *rth = net->rtnl_get();
 	int r = 0;
 
@@ -596,6 +608,12 @@ int install_limiter(struct ap_session *ses, int down_speed, int down_burst, int 
 
 int remove_limiter(struct ap_session *ses, int idx)
 {
+#ifdef HAVE_VPP
+	if (ses->non_dev_ppp_fixup != NULL) {
+		return vpppolicer_remove_limiter(ses);
+	}
+#endif
+
 	struct rtnl_handle *rth = net->rtnl_get();
 
 	if (!rth) {

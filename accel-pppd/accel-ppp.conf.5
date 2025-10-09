@@ -1255,6 +1255,30 @@ Due to accel-ppp operates with rates in kilobit basis if you send rates in diffe
 .TP
 .BI "rate-limit=" download_speed/upload_speed
 Specifies, should accel-ppp set default rate-limit for clients. Clients rate-limit will be overwritten by RADIUS filter attributes or chap-secrets rate-limit params.
+.TP
+.BI "vpp-policer-type=" 1r2c|1r3c|2r3c
+Specifies the type of policer used for VPP PPPoE sessions.
+.TP
+.BI "vpp-cir-factor=" n
+Specifies the factor for CIB used for policing of the VPP PPPoE session.
+.TP
+.BI "vpp-cb-factor=" n
+Specifies the factor for CB used for policing of the VPP PPPoE session.
+.TP
+.BI "vpp-eir-factor=" n
+Specifies the factor for EIR used for policing of the VPP PPPoE session. Used for 2r3c type policer.
+.TP
+.BI "vpp-eb-factor=" n
+Specifies the factor for EB used for policing of the VPP PPPoE session. Used for 1r3c and 2r3c type policer.
+.TP
+.BI "vpp-conform-action=" transmit|drop
+Specifies the action, what to do for packets that conform to the policer rule. "transmit" by default for all policer types.
+.TP
+.BI "vpp-exceed-action=" transmit|drop
+Specifies the action, what to do for packets that exceed the policer rule. Used for 2r3c and "exceed" packets are those packets that exceed the CIB rate, but feet to EIB and EB bucket is not full, "transmit" by default for 2r3c policer type.
+.TP
+.BI "vpp-violate-action=" transmit|drop
+Specifies the action to take for packets that violate the policer rule. By default is "drop" for all policer types.
 .SH [cli]
 .br
 Configuration of the command line interface.
