@@ -89,6 +89,10 @@ IF (HAVE_VPP)
 	ADD_DEFINITIONS(-DHAVE_VPP)
 ENDIF (HAVE_VPP)
 
+IF (HAVE_SESSION_HOOKS)
+	ADD_DEFINITIONS(-DHAVE_SESSION_HOOKS)
+ENDIF (HAVE_SESSION_HOOKS)
+
 ADD_SUBDIRECTORY(triton)
 ADD_SUBDIRECTORY(vlan-mon)
 ADD_SUBDIRECTORY(ctrl)
@@ -177,17 +181,11 @@ ADD_EXECUTABLE(accel-pppd
 	main.c
 )
 
-IF (HAVE_VPP)
+IF (HAVE_SESSION_HOOKS)
 	TARGET_SOURCES(accel-pppd PRIVATE
-				   vpputils/vpputils.c
-				   vpputils/vpppoe.c
-				   vpputils/vppiputils.c
-				   vpputils/vppipv6layer.c
-				   vpputils/vpppolicer.c
-	)
-
-	TARGET_LINK_LIBRARIES(accel-pppd vapiclient vlibapi vlib)
-endif(HAVE_VPP)
+		ap_session_hooks.c)
+	ADD_SUBDIRECTORY(session_hooks)
+ENDIF (HAVE_SESSION_HOOKS)
 
 # check if we have getcontext/setcontext
 INCLUDE(CheckFunctionExists)
