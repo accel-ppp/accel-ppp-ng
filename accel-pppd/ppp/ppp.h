@@ -78,13 +78,6 @@ struct ppp_t
 	int is_unit_read_enabled;
 
 	/**
-	 * If this flag is set, then the related /dev/ppp routine would be omitted.
-	 * The socket `fd` would be used to read channel and unit data.
-	 * g.e. `establish_ppp()` would not open /dev/ppp
-	 */
-	int is_vpppoe;
-
-	/**
 	 * In a VPP environment, this handler is used to read and process the ICMPv6
 	 * and DHCPv6 packets. This is required for IPv6 client configuration.
 	 * Code of the handler in `vpputils/vppipv6layer.c`

@@ -73,7 +73,6 @@ void __export ppp_init(struct ppp_t *ppp)
 	ppp->chan_fd = -1;
 	ppp->unit_fd = -1;
 	ppp->is_unit_read_enabled = 0;
-	ppp->is_vpppoe = 0;
 
 	ap_session_init(&ppp->ses);
 }
@@ -83,11 +82,14 @@ int __export establish_ppp(struct ppp_t *ppp)
 	if (ap_shutdown)
 		return -1;
 
-	if (ppp->is_vpppoe) {
+#ifdef HAVE_SESSION_HOOKS
+	if (ppp->ses.hooks && ppp->ses.hooks->is_non_dev_ppp) {
 		/* use fd as chan_fd mostly for sending chan packets */
 		ppp->chan_fd = ppp->fd;
 		net->set_nonblocking(ppp->fd, 1);
-	} else {
+	} else 
+#endif /* HAVE_SESSION_HOOKS */
+	{
 		/* Open an instance of /dev/ppp and connect the channel to it */
 		if (net->ppp_ioctl(ppp->fd, PPPIOCGCHAN, &ppp->chan_idx) == -1) {
 			log_ppp_error("ioctl(PPPIOCGCHAN): %s\n", strerror(errno));
@@ -118,10 +120,12 @@ int __export establish_ppp(struct ppp_t *ppp)
 
 	ppp->chan_hnd.fd = ppp->chan_fd;
 
+#ifdef HAVE_SESSION_HOOKS
 	/* Use combined read for non-dev-ppp*/
-	if (ppp->is_vpppoe)
+	if (ppp->ses.hooks && ppp->ses.hooks->is_non_dev_ppp)
 		ppp->chan_hnd.read = ppp_chan_and_unit_read;
-	else 
+	else
+#endif /* HAVE_SESSION_HOOKS */
 		ppp->chan_hnd.read = ppp_chan_read;
 
 	if (conf_unit_preallocate) {
@@ -141,9 +145,10 @@ int __export establish_ppp(struct ppp_t *ppp)
 	return 0;
 
 exit_close_chan:
-	if (!ppp->is_vpppoe) {
+#ifdef HAVE_SESSION_HOOKS
+	if (!(ppp->ses.hooks && ppp->ses.hooks->is_non_dev_ppp))
+#endif /* HAVE_SESSION_HOOKS */
 		close(ppp->chan_fd);
-	}
 
 	ppp->chan_fd = -1;
 	ppp->chan_hnd.fd = -1;
@@ -157,12 +162,20 @@ int __export connect_ppp_channel(struct ppp_t *ppp)
 	struct ifreq ifr;
 
 	if (ppp->unit_fd != -1) {
-		if (!ppp->is_vpppoe && setup_ppp_mru(ppp))
+		if (
+#ifdef HAVE_SESSION_HOOKS
+			!(ppp->ses.hooks && ppp->ses.hooks->is_non_dev_ppp) &&
+#endif /* HAVE_SESSION_HOOKS */
+			setup_ppp_mru(ppp))
 			goto exit_close_unit;
 		return 0;
 	}
 
-	if (!ppp->is_vpppoe && uc_size) {
+	if (
+#ifdef HAVE_SESSION_HOOKS
+		!(ppp->ses.hooks && ppp->ses.hooks->is_non_dev_ppp) &&
+#endif /* HAVE_SESSION_HOOKS */
+		 uc_size) {
 		pthread_mutex_lock(&uc_lock);
 		if (!list_empty(&uc_list)) {
 			uc = list_entry(uc_list.next, typeof(*uc), entry);
@@ -172,9 +185,12 @@ int __export connect_ppp_channel(struct ppp_t *ppp)
 		pthread_mutex_unlock(&uc_lock);
 	}
 
-	if (ppp->is_vpppoe) {
+#ifdef HAVE_SESSION_HOOKS
+	if (ppp->ses.hooks && ppp->ses.hooks->is_non_dev_ppp) {
 		ppp->unit_fd = ppp->fd;
-	} else if (uc) {
+	} else
+#endif /* HAVE_SESSION_HOOKS */
+	 if (uc) {
 		ppp->unit_fd = uc->fd;
 		ppp->ses.unit_idx = uc->unit_idx;
 		mempool_free(uc);
@@ -198,10 +214,13 @@ int __export connect_ppp_channel(struct ppp_t *ppp)
 		}
 	}
 
-	if (ppp->is_vpppoe) {
+#ifdef HAVE_SESSION_HOOKS
+	if (ppp->ses.hooks && ppp->ses.hooks->is_non_dev_ppp) {
 		ppp->ses.ifindex = -1;
 		ppp->is_unit_read_enabled = 1;
-	} else {
+	} else 
+#endif /* HAVE_SESSION_HOOKS */
+	{
 		if (net->ppp_ioctl(ppp->chan_fd, PPPIOCCONNECT, &ppp->ses.unit_idx) < 0) {
 			log_ppp_error("ioctl(PPPIOCCONNECT): %s\n", strerror(errno));
 			goto exit_close_unit;
@@ -235,7 +254,9 @@ int __export connect_ppp_channel(struct ppp_t *ppp)
 	return 0;
 
 exit_close_unit:
-	if (!ppp->is_vpppoe)
+#ifdef HAVE_SESSION_HOOKS
+	if (!(ppp->ses.hooks && ppp->ses.hooks->is_non_dev_ppp))
+#endif /* HAVE_SESSION_HOOKS */
 		close(ppp->unit_fd);
 	ppp->unit_fd = -1;
 exit:
@@ -245,7 +266,11 @@ exit:
 static void destroy_ppp_channel(struct ppp_t *ppp)
 {
 	/* do not close chan_hnd.fd if its non-dev-ppp(chan_hnd.fd == ppp.fd) */
-	triton_md_unregister_handler(&ppp->chan_hnd, !ppp->is_vpppoe);
+	int is_close = 1;
+#ifdef HAVE_SESSION_HOOKS
+	is_close = !(ppp->ses.hooks && ppp->ses.hooks->is_non_dev_ppp);
+#endif /* HAVE_SESSION_HOOKS */
+	triton_md_unregister_handler(&ppp->chan_hnd, is_close);
 	close(ppp->fd);
 	ppp->fd = -1;
 	ppp->chan_fd = -1;
@@ -295,10 +320,12 @@ static void destablish_ppp(struct ppp_t *ppp)
 		return;
 	}
 
-	if (ppp->is_vpppoe) {
+#ifdef HAVE_SESSION_HOOKS
+	if (ppp->ses.hooks && ppp->ses.hooks->is_non_dev_ppp) {
 		ppp->is_unit_read_enabled = 0;
 		goto skip;
 	}
+#endif
 
 	if (conf_unit_cache) {
 		struct ifreq ifr;
@@ -343,7 +370,11 @@ skip:
 
 	log_ppp_debug("ppp destablished\n");
 
-	if (!ppp->is_vpppoe && uc) {
+	if (
+#ifdef HAVE_SESSION_HOOKS
+		!(ppp->ses.hooks && ppp->ses.hooks->is_non_dev_ppp) &&
+#endif /* HAVE_SESSION_HOOKS */
+		 uc) {
 		pthread_mutex_lock(&uc_lock);
 		list_add_tail(&uc->entry, &uc_list);
 		if (++uc_size > conf_unit_cache)
