@@ -27,6 +27,10 @@
 #include "config.h"
 #include "memdebug.h"
 
+#ifdef HAVE_SESSION_HOOKS
+# include "ap_session_hooks.h"
+#endif /* HAVE_SESSION_HOOKS */
+
 #define SID_SOURCE_SEQ 0
 #define SID_SOURCE_URANDOM 1
 
@@ -77,12 +81,13 @@ void __export ap_session_init(struct ap_session *ses)
 	ses->unit_idx = -1;
 	ses->net = net;
 
-	ses->non_dev_ppp_fixup = NULL;
-	ses->vpp_sw_if_index = -1;
-	INIT_LIST_HEAD(&ses->vpp_routes);
+	ses->ppp_ipv6_nd_recv = NULL;
+	ses->ppp_ipv6_dhcpv6_recv = NULL;
 
-	ses->vpp_nd_recv = NULL;
-	ses->vpp_dhcpv6_recv = NULL;
+#ifdef HAVE_SESSION_HOOKS
+	ses->hooks = NULL;
+	ses->hooks_priv_data = NULL;
+#endif /* HAVE_SESSION_HOOKS */
 
 	ses->vrf_name = NULL;
 }
@@ -159,12 +164,14 @@ void __export ap_session_activate(struct ap_session *ses)
 	if (ap_shutdown)
 		return;
 
-	if (ses->non_dev_ppp_fixup != NULL) {
-		if (ses->non_dev_ppp_fixup(ses)) {
+#ifdef HAVE_SESSION_HOOKS
+	if (ses->hooks != NULL && ses->hooks->pppoe_create_session_interface) {
+		if (ses->hooks->pppoe_create_session_interface(ses)) {
 			ap_session_terminate(ses, TERM_NAS_ERROR, 0);
 			return;
 		}
 	}
+#endif /* HAVE_SESSION_HOOKS */
 
 	ap_session_ifup(ses);
 
@@ -289,6 +296,11 @@ void __export ap_session_finished(struct ap_session *ses)
 		else
 			kill(getpid(), SIGTERM);
 	}
+
+#ifdef HAVE_SESSION_HOOKS
+	if (ses->hooks && ses->hooks->session_hook_deinit)
+		ses->hooks->session_hook_deinit(ses);
+#endif /* HAVE_SESSION_HOOKS */
 }
 
 void __export ap_session_terminate(struct ap_session *ses, int cause, int hard)
