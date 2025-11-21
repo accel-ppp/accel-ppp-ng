@@ -11,9 +11,9 @@
 
 #include "rbtree.h"
 
-#ifdef HAVE_VPP
-# include "vpputils.h"
-#endif /* HAVE_VPP */
+#ifdef HAVE_SESSION_HOOKS
+# include "ap_session_hooks.h"
+#endif /* HAVE_SESSION_HOOKS */
 
 /* PPPoE codes */
 #define CODE_PADI           0x09
@@ -106,12 +106,12 @@ struct pppoe_serv_t
 	unsigned int stopping:1;
 	unsigned int vlan_mon:1;
 	unsigned int is_vpppoe:1;
-	unsigned int is_vpppoe_lost:1;
 	unsigned int stop_cause;
 
-#ifdef HAVE_VPP
-	struct vpp_handler_t vpp_handler;
-#endif /* HAVE_VPP */
+#ifdef HAVE_SESSION_HOOKS
+	/* hooks set to sessions for this server */
+	struct ap_session_hooks_t *ses_hooks;
+#endif /* HAVE_SESSION_HOOKS */
 };
 
 extern int conf_verbose;
