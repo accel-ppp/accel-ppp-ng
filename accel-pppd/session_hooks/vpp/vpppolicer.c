@@ -15,6 +15,7 @@
 #include "events.h"
 #include "vpputils.h"
 #include "vpppoe.h"
+#include "vpphooks.h"
 
 #include "vpppolicer.h"
 
@@ -42,7 +43,7 @@ static vapi_error_e vpppolicer_set_input_callback(struct vapi_ctx_s *ctx,
 	return rv;
 }
 
-__export int vpppolicer_set_input(int is_add, uint32_t ifindex, const char *policer_name)
+int vpppolicer_set_input(int is_add, uint32_t ifindex, const char *policer_name)
 {
 	vapi_error_e err = -1;
 	struct vapi_ctx_s *ctx;
@@ -81,7 +82,7 @@ static vapi_error_e vpppolicer_set_output_callback(struct vapi_ctx_s *ctx,
 	return rv;
 }
 
-__export int vpppolicer_set_output(int is_add, uint32_t ifindex, const char *policer_name)
+int vpppolicer_set_output(int is_add, uint32_t ifindex, const char *policer_name)
 {
 	vapi_error_e err = -1;
 	struct vapi_ctx_s *ctx;
@@ -166,14 +167,15 @@ exit:
 
 static void vpppolicer_generate_name(char *name, size_t size, struct ap_session *ses, uint32_t rate, uint64_t burst, int is_up)
 {
-	snprintf(name, size, "vyos_%d_%d_%ld_%s", ses->vpp_sw_if_index, rate, burst, is_up ? "up" : "down");
+	snprintf(name, size, "vyos_%d_%d_%ld_%s", VPPHOOK_GET_PRIV(ses)->vpp_sw_if_index, rate, burst, is_up ? "up" : "down");
 }
 
-__export int vpppolicer_install_limiter(struct ap_session *ses, int down_speed, int down_burst, int up_speed, int up_burst)
+int vpppolicer_install_limiter(struct ap_session *ses, int down_speed, int down_burst, int up_speed, int up_burst)
 {
 	int ret = 0;
 	char policer_input[POLICER_NAME_MAX_LEN] = {};
 	char policer_output[POLICER_NAME_MAX_LEN] = {};
+	struct vpphook_private_data_t *vpphook_data = VPPHOOK_GET_PRIV(ses);
 
 	/* convert rate to kbits/s and burst to bits */
 	down_speed = down_speed * 8 / 1000;
@@ -187,74 +189,75 @@ __export int vpppolicer_install_limiter(struct ap_session *ses, int down_speed, 
 	if (down_speed) {
 		vpppolicer_generate_name(policer_output, POLICER_NAME_MAX_LEN - 1, ses, down_speed, down_burst, 0);
 		vpppolicer_add_del(1, policer_output, down_speed, down_burst);
-		ret = vpppolicer_set_output(1, ses->vpp_sw_if_index, policer_output);
+		ret = vpppolicer_set_output(1, vpphook_data->vpp_sw_if_index, policer_output);
 		if (ret) {
 			vpppolicer_add_del(0, policer_output, down_speed, down_burst);
 			goto exit;
 		}
 
-		ses->vpppolicer_down = down_speed;
-		ses->vpppolicer_down_burst = down_burst;
+		vpphook_data->vpppolicer_down = down_speed;
+		vpphook_data->vpppolicer_down_burst = down_burst;
 	}
 
 	if (up_speed) {
 		vpppolicer_generate_name(policer_input, POLICER_NAME_MAX_LEN - 1, ses, up_speed, up_burst, 1);
 		vpppolicer_add_del(1, policer_input, up_speed, up_burst);
-		ret = vpppolicer_set_input(1, ses->vpp_sw_if_index, policer_input);
+		ret = vpppolicer_set_input(1, vpphook_data->vpp_sw_if_index, policer_input);
 		if (ret) {
 			vpppolicer_add_del(0, policer_input, up_speed, up_burst);
 			if (down_speed) {
-				vpppolicer_set_output(0, ses->vpp_sw_if_index, policer_output);
+				vpppolicer_set_output(0, vpphook_data->vpp_sw_if_index, policer_output);
 				vpppolicer_add_del(0, policer_output, down_speed, down_burst);
-				ses->vpppolicer_down = 0;
-				ses->vpppolicer_down_burst = 0;
+				vpphook_data->vpppolicer_down = 0;
+				vpphook_data->vpppolicer_down_burst = 0;
 			}
 			goto exit;
 		}
 
-		vpppoe_set_feature(ses->vpp_sw_if_index, 1, "policer-input", "ip4-unicast");
-		vpppoe_set_feature(ses->vpp_sw_if_index, 1, "policer-input", "ip6-unicast");
-		vpppoe_set_feature(ses->vpp_sw_if_index, 1, "policer-input", "ip4-multicast");
-		vpppoe_set_feature(ses->vpp_sw_if_index, 1, "policer-input", "ip6-multicast");
+		vpppoe_set_feature(vpphook_data->vpp_sw_if_index, 1, "policer-input", "ip4-unicast");
+		vpppoe_set_feature(vpphook_data->vpp_sw_if_index, 1, "policer-input", "ip6-unicast");
+		vpppoe_set_feature(vpphook_data->vpp_sw_if_index, 1, "policer-input", "ip4-multicast");
+		vpppoe_set_feature(vpphook_data->vpp_sw_if_index, 1, "policer-input", "ip6-multicast");
 
-		ses->vpppolicer_up = up_speed;
-		ses->vpppolicer_up_burst = up_burst;
+		vpphook_data->vpppolicer_up = up_speed;
+		vpphook_data->vpppolicer_up_burst = up_burst;
 	}
 
 exit:
 	return ret;
 }
 
-__export int vpppolicer_remove_limiter(struct ap_session *ses)
+int vpppolicer_remove_limiter(struct ap_session *ses)
 {
 	int ret = 0;
 	char policer_input[64] = {};
 	char policer_output[64] = {};
+	struct vpphook_private_data_t *vpphook_data = VPPHOOK_GET_PRIV(ses);
 
-	if (ses->vpppolicer_down) {
-		vpppolicer_generate_name(policer_output, POLICER_NAME_MAX_LEN - 1, ses, ses->vpppolicer_down, ses->vpppolicer_down_burst, 0);
-		ret = vpppolicer_set_output(0, ses->vpp_sw_if_index, policer_output);
+	if (vpphook_data->vpppolicer_down) {
+		vpppolicer_generate_name(policer_output, POLICER_NAME_MAX_LEN - 1, ses, vpphook_data->vpppolicer_down, vpphook_data->vpppolicer_down_burst, 0);
+		ret = vpppolicer_set_output(0, vpphook_data->vpp_sw_if_index, policer_output);
 		if (ret)
 			goto exit;
-		vpppolicer_add_del(0, policer_output, ses->vpppolicer_down, ses->vpppolicer_down_burst);
-		ses->vpppolicer_down = 0;
-		ses->vpppolicer_down_burst = 0;
+		vpppolicer_add_del(0, policer_output, vpphook_data->vpppolicer_down, vpphook_data->vpppolicer_down_burst);
+		vpphook_data->vpppolicer_down = 0;
+		vpphook_data->vpppolicer_down_burst = 0;
 	}
 
-	if (ses->vpppolicer_up) {
-		vpppolicer_generate_name(policer_input, POLICER_NAME_MAX_LEN - 1, ses, ses->vpppolicer_up, ses->vpppolicer_up_burst, 1);
-		ret = vpppolicer_set_input(0, ses->vpp_sw_if_index, policer_input);
+	if (vpphook_data->vpppolicer_up) {
+		vpppolicer_generate_name(policer_input, POLICER_NAME_MAX_LEN - 1, ses, vpphook_data->vpppolicer_up, vpphook_data->vpppolicer_up_burst, 1);
+		ret = vpppolicer_set_input(0, vpphook_data->vpp_sw_if_index, policer_input);
 		if (ret)
 			goto exit;
-		vpppolicer_add_del(0, policer_input, ses->vpppolicer_up, ses->vpppolicer_up_burst);
+		vpppolicer_add_del(0, policer_input, vpphook_data->vpppolicer_up, vpphook_data->vpppolicer_up_burst);
 
-		vpppoe_set_feature(ses->vpp_sw_if_index, 0, "policer-input", "ip4-unicast");
-		vpppoe_set_feature(ses->vpp_sw_if_index, 0, "policer-input", "ip6-unicast");
-		vpppoe_set_feature(ses->vpp_sw_if_index, 0, "policer-input", "ip4-multicast");
-		vpppoe_set_feature(ses->vpp_sw_if_index, 0, "policer-input", "ip6-multicast");
+		vpppoe_set_feature(vpphook_data->vpp_sw_if_index, 0, "policer-input", "ip4-unicast");
+		vpppoe_set_feature(vpphook_data->vpp_sw_if_index, 0, "policer-input", "ip6-unicast");
+		vpppoe_set_feature(vpphook_data->vpp_sw_if_index, 0, "policer-input", "ip4-multicast");
+		vpppoe_set_feature(vpphook_data->vpp_sw_if_index, 0, "policer-input", "ip6-multicast");
 
-		ses->vpppolicer_up = 0;
-		ses->vpppolicer_up_burst = 0;
+		vpphook_data->vpppolicer_up = 0;
+		vpphook_data->vpppolicer_up_burst = 0;
 	}
 
 exit:

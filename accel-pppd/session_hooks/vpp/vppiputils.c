@@ -9,10 +9,9 @@
 #include "ap_session.h"
 #include "triton.h"
 #include "vpputils.h"
+#include "vpphooks.h"
 
 #include "vppiputils.h"
-
-#include <stdio.h>
 
 DEFINE_VAPI_MSG_IDS_IP_API_JSON
 
@@ -39,17 +38,19 @@ struct vpp_route_t {
 static void vpp_iproute_save(struct ap_session *ses, in_addr_t dst, int mask)
 {
 	struct vpp_route_t *saved_route = (struct vpp_route_t *)malloc(sizeof(*saved_route));
+	struct vpphook_private_data_t *vpphook_data = VPPHOOK_GET_PRIV(ses);
 	saved_route->af = AF_INET;
 	memcpy(&saved_route->un.ip4.dst, &dst, sizeof(dst));
 	saved_route->un.ip4.mask = mask;
-	list_add_tail(&saved_route->entry, &ses->vpp_routes);
+	list_add_tail(&saved_route->entry, &vpphook_data->vpp_routes);
 }
 
 static void vpp_iproute_del_saved(struct ap_session *ses, in_addr_t dst, int mask)
 {
 	struct list_head *pos, *n;
+	struct vpphook_private_data_t *vpphook_data = VPPHOOK_GET_PRIV(ses);
 
-	list_for_each_safe(pos, n, &ses->vpp_routes) {
+	list_for_each_safe(pos, n, &vpphook_data->vpp_routes) {
 		struct vpp_route_t *saved_route = list_entry(pos, typeof(*saved_route), entry);
 
 		if (saved_route->af == AF_INET && saved_route->un.ip4.dst == dst && saved_route->un.ip4.mask == mask) {
@@ -62,17 +63,19 @@ static void vpp_iproute_del_saved(struct ap_session *ses, in_addr_t dst, int mas
 static void vpp_ip6route_save(struct ap_session *ses, const struct in6_addr *dst, int pref_len)
 {
 	struct vpp_route_t *saved_route = (struct vpp_route_t *)malloc(sizeof(*saved_route));
+	struct vpphook_private_data_t *vpphook_data = VPPHOOK_GET_PRIV(ses);
 	saved_route->af = AF_INET6;
 	memcpy(&saved_route->un.ip6.dst, dst, sizeof(*dst));
 	saved_route->un.ip6.preffix = pref_len;
-	list_add_tail(&saved_route->entry, &ses->vpp_routes);
+	list_add_tail(&saved_route->entry, &vpphook_data->vpp_routes);
 }
 
 static void vpp_ip6route_del_saved(struct ap_session *ses, const struct in6_addr *dst, int pref_len)
 {
 	struct list_head *pos, *n;
+	struct vpphook_private_data_t *vpphook_data = VPPHOOK_GET_PRIV(ses);
 
-	list_for_each_safe(pos, n, &ses->vpp_routes) {
+	list_for_each_safe(pos, n, &vpphook_data->vpp_routes) {
 		struct vpp_route_t *saved_route = list_entry(pos, typeof(*saved_route), entry);
 
 		if (saved_route->af == AF_INET6 && !memcmp(saved_route->un.ip6.dst.s6_addr, dst->s6_addr, sizeof(dst->s6_addr)) && saved_route->un.ip6.preffix == pref_len) {
@@ -124,7 +127,7 @@ exit:
 	return err;
 }
 
-__export int vpp_iproute_add_del(struct ap_session *ses, int is_add, int ifindex, in_addr_t src,
+int vpp_iproute_add_del(struct ap_session *ses, int is_add, int ifindex, in_addr_t src,
 								 in_addr_t dst, in_addr_t gw, int proto, int mask, uint32_t prio)
 {
 	int ret = vpp_iproute(is_add, ifindex, dst, mask);
@@ -169,7 +172,7 @@ exit:
 	return err;
 }
 
-__export int vpp_ip6route_add_del(struct ap_session *ses, int is_add, int ifindex, const struct in6_addr *dst, int pref_len, const struct in6_addr *gw, int proto, uint32_t prio)
+int vpp_ip6route_add_del(struct ap_session *ses, int is_add, int ifindex, const struct in6_addr *dst, int pref_len, const struct in6_addr *gw, int proto, uint32_t prio)
 {
 	int ret = vpp_ip6route(is_add, ifindex, dst, pref_len);
 
@@ -181,17 +184,18 @@ __export int vpp_ip6route_add_del(struct ap_session *ses, int is_add, int ifinde
 	return ret;
 }
 
-__export int vpp_iproute_flush(struct ap_session *ses)
+int vpp_iproute_flush(struct ap_session *ses)
 {
 	struct list_head *pos, *n;
+	struct vpphook_private_data_t *vpphook_data = VPPHOOK_GET_PRIV(ses);
 
-	list_for_each_safe(pos, n, &ses->vpp_routes) {
+	list_for_each_safe(pos, n, &vpphook_data->vpp_routes) {
 		struct vpp_route_t *saved_route = list_entry(pos, typeof(*saved_route), entry);
 
 		if (saved_route->af == AF_INET)
-			vpp_iproute(0, ses->vpp_sw_if_index, saved_route->un.ip4.dst, saved_route->un.ip4.mask);
+			vpp_iproute(0, vpphook_data->vpp_sw_if_index, saved_route->un.ip4.dst, saved_route->un.ip4.mask);
 		else if (saved_route->af == AF_INET6)
-			vpp_ip6route(0, ses->vpp_sw_if_index, &saved_route->un.ip6.dst, saved_route->un.ip6.preffix);
+			vpp_ip6route(0, vpphook_data->vpp_sw_if_index, &saved_route->un.ip6.dst, saved_route->un.ip6.preffix);
 
 		list_del(&saved_route->entry);
 		free(saved_route);

@@ -69,16 +69,18 @@ void vpp_unlock() {
 	pthread_mutex_unlock(&vpp_connect.lock_vpp);
 }
 
-void __export vpp_get()
+int vpp_get()
 {
 	vpp_lock();
 	int rfc = __sync_fetch_and_add(&vpp_connect.rfcounter, 1);
 	if (!rfc)
 		vpppoe_connect_to_vpp();
 	vpp_unlock();
+
+	return 0;
 }
 
-void __export vpp_put()
+void vpp_put()
 {
 	vpp_lock();
 	int rfc = __sync_sub_and_fetch(&vpp_connect.rfcounter, 1);
@@ -87,31 +89,10 @@ void __export vpp_put()
 	vpp_unlock();
 }
 
-void __export vpp_register_handler(struct vpp_handler_t *h)
-{
-	if (h->on_vpp_connection_lost)
-		list_add_tail(&h->entry, &vpp_connect.vpp_handlers);
-}
-
-void __export vpp_unregister_handler(struct vpp_handler_t *h)
-{
-	list_del(&h->entry);
-}
-
-void vpp_call_on_vpp_connection_lost()
-{
-	struct vpp_handler_t *h = NULL;
-	list_for_each_entry(h, &vpp_connect.vpp_handlers, entry) {
-		if (h->on_vpp_connection_lost)
-			h->on_vpp_connection_lost(h);
-	}
-}
-
 void vpp_check_error(vapi_error_e err)
 {
 	if (vpp_connect.vapi && err >= VAPI_ECON_FAIL) {
 		vpppoe_disconnect_from_vpp();
-		vpp_call_on_vpp_connection_lost();
 	}
 }
 
@@ -121,7 +102,7 @@ static void vpppoe_load_config(void)
 
 	opt = conf_get_opt("vpp", "queue-size");
 	if (opt)
-		sc_vpp_queue_size = atoi(opt);      
+		sc_vpp_queue_size = atoi(opt);
 }
 
 static void vpppoe_init()
