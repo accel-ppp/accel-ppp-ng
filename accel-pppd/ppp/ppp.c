@@ -263,14 +263,10 @@ exit:
 	return -1;
 }
 
-static void destroy_ppp_channel(struct ppp_t *ppp)
+static void destroy_ppp_channel(struct ppp_t *ppp, int is_non_dev)
 {
 	/* do not close chan_hnd.fd if its non-dev-ppp(chan_hnd.fd == ppp.fd) */
-	int is_close = 1;
-#ifdef HAVE_SESSION_HOOKS
-	is_close = !(ppp->ses.hooks && ppp->ses.hooks->is_non_dev_ppp);
-#endif /* HAVE_SESSION_HOOKS */
-	triton_md_unregister_handler(&ppp->chan_hnd, is_close);
+	triton_md_unregister_handler(&ppp->chan_hnd, !is_non_dev);
 	close(ppp->fd);
 	ppp->fd = -1;
 	ppp->chan_fd = -1;
@@ -313,19 +309,23 @@ static int setup_ppp_mru(struct ppp_t *ppp)
 static void destablish_ppp(struct ppp_t *ppp)
 {
 	struct pppunit_cache *uc = NULL;
+	int is_non_dev_ppp = 0;
+#ifdef HAVE_SESSION_HOOKS
+	is_non_dev_ppp = ppp->ses.hooks && ppp->ses.hooks->is_non_dev_ppp;
+#endif /* HAVE_SESSION_HOOKS */
 
 	if (ppp->unit_fd < 0) {
 		ap_session_finished(&ppp->ses);
-		destroy_ppp_channel(ppp);
+		destroy_ppp_channel(ppp, is_non_dev_ppp);
 		return;
 	}
 
 #ifdef HAVE_SESSION_HOOKS
-	if (ppp->ses.hooks && ppp->ses.hooks->is_non_dev_ppp) {
+	if (is_non_dev_ppp) {
 		ppp->is_unit_read_enabled = 0;
 		goto skip;
 	}
-#endif
+#endif /* HAVE_SESSION_HOOKS */
 
 	if (conf_unit_cache) {
 		struct ifreq ifr;
@@ -366,13 +366,13 @@ skip:
 
 	ppp->unit_fd = -1;
 
-	destroy_ppp_channel(ppp);
+	destroy_ppp_channel(ppp, is_non_dev_ppp);
 
 	log_ppp_debug("ppp destablished\n");
 
 	if (
 #ifdef HAVE_SESSION_HOOKS
-		!(ppp->ses.hooks && ppp->ses.hooks->is_non_dev_ppp) &&
+		!is_non_dev_ppp &&
 #endif /* HAVE_SESSION_HOOKS */
 		 uc) {
 		pthread_mutex_lock(&uc_lock);
@@ -707,7 +707,6 @@ void __export ppp_layer_finished(struct ppp_t *ppp, struct ppp_layer_data_t *d)
 				return;
 		}
 	}
-
 	destablish_ppp(ppp);
 }
 
