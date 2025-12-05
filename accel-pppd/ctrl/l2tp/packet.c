@@ -8,7 +8,7 @@
 #include <fcntl.h>
 #include <arpa/inet.h>
 
-#include <openssl/md5.h>
+#include <openssl/evp.h>
 
 #include "triton.h"
 #include "log.h"
@@ -150,9 +150,9 @@ static void memxor(uint8_t *dst, const uint8_t *src, size_t sz)
 static int decode_avp(struct l2tp_avp_t *avp, const struct l2tp_attr_t *RV,
 		      const char *secret, size_t secret_len)
 {
-	MD5_CTX md5_ctx;
-	uint8_t md5[MD5_DIGEST_LENGTH];
-	uint8_t p1[MD5_DIGEST_LENGTH];
+	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
+	uint8_t md5[EVP_MAX_MD_SIZE];
+	uint8_t p1[EVP_MAX_MD_SIZE];
 	uint8_t *prev_block = NULL;
 	uint16_t avp_len;
 	uint16_t attr_len;
@@ -168,28 +168,31 @@ static int decode_avp(struct l2tp_avp_t *avp, const struct l2tp_attr_t *RV,
 		log_warn("l2tp: incorrect hidden avp received (type %hu):"
 			 " length too small (%hu bytes)\n",
 			 ntohs(avp->type), avp_len);
+		EVP_MD_CTX_free(evp_ctx);
 		return -1;
 	}
 	attr_len = avp_len - sizeof(struct l2tp_avp_t);
 
 	/* Decode first block */
-	MD5_Init(&md5_ctx);
-	MD5_Update(&md5_ctx, &avp->type, sizeof(avp->type));
-	MD5_Update(&md5_ctx, secret, secret_len);
-	MD5_Update(&md5_ctx, RV->val.octets, RV->length);
-	MD5_Final(p1, &md5_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
+	EVP_DigestUpdate(evp_ctx, &avp->type, sizeof(avp->type));
+	EVP_DigestUpdate(evp_ctx, secret, secret_len);
+	EVP_DigestUpdate(evp_ctx, RV->val.octets, RV->length);
+	EVP_DigestFinal_ex(evp_ctx, p1, NULL);
 
-	if (attr_len <= MD5_DIGEST_LENGTH) {
+	if (attr_len <= EVP_MD_get_size(EVP_md5())) {
 		memxor(avp->val, p1, attr_len);
+		EVP_MD_CTX_free(evp_ctx);
 		return 0;
 	}
 
-	memxor(p1, avp->val, MD5_DIGEST_LENGTH);
+	memxor(p1, avp->val, EVP_MD_get_size(EVP_md5()));
 	orig_attr_len = ntohs(*(uint16_t *)p1);
 
-	if (orig_attr_len <= MD5_DIGEST_LENGTH - 2) {
+	if (orig_attr_len <= EVP_MD_get_size(EVP_md5()) - 2) {
 		/* Enough bytes decoded already, no need to decode padding */
-		memcpy(avp->val, p1, MD5_DIGEST_LENGTH);
+		memcpy(avp->val, p1, EVP_MD_get_size(EVP_md5()));
+		EVP_MD_CTX_free(evp_ctx);
 		return 0;
 	}
 
@@ -199,35 +202,37 @@ static int decode_avp(struct l2tp_avp_t *avp, const struct l2tp_attr_t *RV,
 			 " attribute length: %hu bytes, advertised original"
 			 " attribute length: %hu bytes)\n",
 			 ntohs(avp->type), attr_len, orig_attr_len);
+		EVP_MD_CTX_free(evp_ctx);
 		return -1;
 	}
 
 	/* Decode remaining blocks. Start from the last block as
 	   preceding blocks must be kept hidden for computing MD5s */
-	bytes_left = orig_attr_len + 2 - MD5_DIGEST_LENGTH;
-	last_block_len = bytes_left % MD5_DIGEST_LENGTH;
-	blocks_left = bytes_left / MD5_DIGEST_LENGTH;
+	bytes_left = orig_attr_len + 2 - EVP_MD_get_size(EVP_md5());
+	last_block_len = bytes_left % EVP_MD_get_size(EVP_md5());
+	blocks_left = bytes_left / EVP_MD_get_size(EVP_md5());
 	if (last_block_len) {
-		prev_block = avp->val + blocks_left * MD5_DIGEST_LENGTH;
-		MD5_Init(&md5_ctx);
-		MD5_Update(&md5_ctx, secret, secret_len);
-		MD5_Update(&md5_ctx, prev_block, MD5_DIGEST_LENGTH);
-		MD5_Final(md5, &md5_ctx);
-		memxor(prev_block + MD5_DIGEST_LENGTH, md5, last_block_len);
-		prev_block -= MD5_DIGEST_LENGTH;
+		prev_block = avp->val + blocks_left * EVP_MD_get_size(EVP_md5());
+		EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
+		EVP_DigestUpdate(evp_ctx, secret, secret_len);
+		EVP_DigestUpdate(evp_ctx, prev_block, EVP_MD_get_size(EVP_md5()));
+		EVP_DigestFinal_ex(evp_ctx, md5, NULL);
+		memxor(prev_block + EVP_MD_get_size(EVP_md5()), md5, last_block_len);
+		prev_block -= EVP_MD_get_size(EVP_md5());
 	} else
-		prev_block = avp->val + (blocks_left - 1) * MD5_DIGEST_LENGTH;
+		prev_block = avp->val + (blocks_left - 1) * EVP_MD_get_size(EVP_md5());
 
 	while (prev_block >= avp->val) {
-		MD5_Init(&md5_ctx);
-		MD5_Update(&md5_ctx, secret, secret_len);
-		MD5_Update(&md5_ctx, prev_block, MD5_DIGEST_LENGTH);
-		MD5_Final(md5, &md5_ctx);
-		memxor(prev_block + MD5_DIGEST_LENGTH, md5, MD5_DIGEST_LENGTH);
-		prev_block -= MD5_DIGEST_LENGTH;
+		EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
+		EVP_DigestUpdate(evp_ctx, secret, secret_len);
+		EVP_DigestUpdate(evp_ctx, prev_block, EVP_MD_get_size(EVP_md5()));
+		EVP_DigestFinal_ex(evp_ctx, md5, NULL);
+		memxor(prev_block + EVP_MD_get_size(EVP_md5()), md5, EVP_MD_get_size(EVP_md5()));
+		prev_block -= EVP_MD_get_size(EVP_md5());
 	}
-	memcpy(avp->val, p1, MD5_DIGEST_LENGTH);
+	memcpy(avp->val, p1, EVP_MD_get_size(EVP_md5()));
 
+	EVP_MD_CTX_free(evp_ctx);
 	return 0;
 }
 
@@ -579,8 +584,8 @@ int encode_attr(const struct l2tp_packet_t *pack, struct l2tp_attr_t *attr,
 		const void *val, uint16_t val_len)
 {
 	uint8_t *u8_ptr = NULL;
-	uint8_t md5[MD5_DIGEST_LENGTH];
-	MD5_CTX md5_ctx;
+	uint8_t md5[EVP_MAX_MD_SIZE];
+	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
 	uint16_t pad_len;
 	uint16_t attr_type;
 	uint16_t blocks_left;
@@ -646,45 +651,48 @@ int encode_attr(const struct l2tp_packet_t *pack, struct l2tp_attr_t *attr,
 	 * ciphered[n] = clear[n] xor MD5(secret, ciphered[n-1])
 	 */
 	attr_type = htons(attr->attr->id);
-	MD5_Init(&md5_ctx);
-	MD5_Update(&md5_ctx, &attr_type, sizeof(attr_type));
-	MD5_Update(&md5_ctx, pack->secret, pack->secret_len);
-	MD5_Update(&md5_ctx, pack->last_RV->val.octets, pack->last_RV->length);
-	MD5_Final(md5, &md5_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
+	EVP_DigestUpdate(evp_ctx, &attr_type, sizeof(attr_type));
+	EVP_DigestUpdate(evp_ctx, pack->secret, pack->secret_len);
+	EVP_DigestUpdate(evp_ctx, pack->last_RV->val.octets, pack->last_RV->length);
+	EVP_DigestFinal_ex(evp_ctx, md5, NULL);
 
-	if (attr->length <= MD5_DIGEST_LENGTH) {
+	if (attr->length <= EVP_MD_get_size(EVP_md5())) {
 		memxor(attr->val.octets, md5, attr->length);
+		EVP_MD_CTX_free(evp_ctx);
 		return 0;
 	}
 
-	memxor(attr->val.octets, md5, MD5_DIGEST_LENGTH);
+	memxor(attr->val.octets, md5, EVP_MD_get_size(EVP_md5()));
 
-	blocks_left = attr->length / MD5_DIGEST_LENGTH - 1;
-	last_block_len = attr->length % MD5_DIGEST_LENGTH;
+	blocks_left = attr->length / EVP_MD_get_size(EVP_md5()) - 1;
+	last_block_len = attr->length % EVP_MD_get_size(EVP_md5());
 
 	for (u8_ptr = attr->val.octets; blocks_left; --blocks_left) {
-		MD5_Init(&md5_ctx);
-		MD5_Update(&md5_ctx, pack->secret, pack->secret_len);
-		MD5_Update(&md5_ctx, u8_ptr, MD5_DIGEST_LENGTH);
-		MD5_Final(md5, &md5_ctx);
-		u8_ptr += MD5_DIGEST_LENGTH;
-		memxor(u8_ptr, md5, MD5_DIGEST_LENGTH);
+		EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
+		EVP_DigestUpdate(evp_ctx, pack->secret, pack->secret_len);
+		EVP_DigestUpdate(evp_ctx, u8_ptr, EVP_MD_get_size(EVP_md5()));
+		EVP_DigestFinal_ex(evp_ctx, md5, NULL);
+		u8_ptr += EVP_MD_get_size(EVP_md5());
+		memxor(u8_ptr, md5, EVP_MD_get_size(EVP_md5()));
 	}
 
 	if (last_block_len) {
-		MD5_Init(&md5_ctx);
-		MD5_Update(&md5_ctx, pack->secret, pack->secret_len);
-		MD5_Update(&md5_ctx, u8_ptr, MD5_DIGEST_LENGTH);
-		MD5_Final(md5, &md5_ctx);
-		memxor(u8_ptr + MD5_DIGEST_LENGTH, md5, last_block_len);
+		EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
+		EVP_DigestUpdate(evp_ctx, pack->secret, pack->secret_len);
+		EVP_DigestUpdate(evp_ctx, u8_ptr, EVP_MD_get_size(EVP_md5()));
+		EVP_DigestFinal_ex(evp_ctx, md5, NULL);
+		memxor(u8_ptr + EVP_MD_get_size(EVP_md5()), md5, last_block_len);
 	}
 
+	EVP_MD_CTX_free(evp_ctx);
 	return 0;
 
 err_free:
 	_free(attr->val.octets);
 	attr->val.octets = NULL;
 err:
+	EVP_MD_CTX_free(evp_ctx);
 	return -1;
 }
 

@@ -14,6 +14,7 @@
 #ifdef HAVE_PRINTF_H
 #include <printf.h>
 #endif
+#include <openssl/evp.h>
 
 #include "events.h"
 #include "triton.h"
@@ -709,7 +710,7 @@ static void print_packet(const char *ifname, const char *op, uint8_t *pack)
 
 static void generate_cookie(struct pppoe_serv_t *serv, const uint8_t *src, uint8_t *cookie, const struct pppoe_tag *host_uniq, const struct pppoe_tag *relay_sid)
 {
-	MD5_CTX ctx;
+	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
 	DES_cblock key;
 	DES_key_schedule ks;
 	int i;
@@ -726,20 +727,20 @@ static void generate_cookie(struct pppoe_serv_t *serv, const uint8_t *src, uint8
 	key[7] = src[5];
 	DES_set_key(&key, &ks);
 
-	MD5_Init(&ctx);
-	MD5_Update(&ctx, serv->secret, SECRET_LENGTH);
-	MD5_Update(&ctx, serv->hwaddr, ETH_ALEN);
-	MD5_Update(&ctx, src, ETH_ALEN);
+	EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
+	EVP_DigestUpdate(evp_ctx, serv->secret, SECRET_LENGTH);
+	EVP_DigestUpdate(evp_ctx, serv->hwaddr, ETH_ALEN);
+	EVP_DigestUpdate(evp_ctx, src, ETH_ALEN);
 	if (relay_sid)
-		MD5_Update(&ctx, relay_sid->tag_data, ntohs(relay_sid->tag_len));
-	MD5_Final(u1.raw, &ctx);
+		EVP_DigestUpdate(evp_ctx, relay_sid->tag_data, ntohs(relay_sid->tag_len));
+	EVP_DigestFinal_ex(evp_ctx, u1.raw, NULL);
 
 	if (host_uniq) {
 		uint8_t buf[16];
-		MD5_Init(&ctx);
-		MD5_Update(&ctx, serv->secret, SECRET_LENGTH);
-		MD5_Update(&ctx, host_uniq->tag_data, ntohs(host_uniq->tag_len));
-		MD5_Final(buf, &ctx);
+		EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
+		EVP_DigestUpdate(evp_ctx, serv->secret, SECRET_LENGTH);
+		EVP_DigestUpdate(evp_ctx, host_uniq->tag_data, ntohs(host_uniq->tag_len));
+		EVP_DigestFinal_ex(evp_ctx, buf, NULL);
 		for (i = 0; i < 4; i++)
 			u1.raw[16 + i] = buf[i] ^ buf[i + 4] ^ buf[i + 8] ^ buf[i + 12];
 	} else
@@ -754,11 +755,13 @@ static void generate_cookie(struct pppoe_serv_t *serv, const uint8_t *src, uint8
 		DES_ecb_encrypt(&u2.b[i], &u1.b[i], &serv->des_ks, DES_ENCRYPT);
 
 	memcpy(cookie, u1.raw, 24);
+
+	EVP_MD_CTX_free(evp_ctx);
 }
 
 static int check_cookie(struct pppoe_serv_t *serv, const uint8_t *src, const uint8_t *cookie, const struct pppoe_tag *relay_sid)
 {
-	MD5_CTX ctx;
+	EVP_MD_CTX *evp_ctx = NULL;
 	DES_cblock key;
 	DES_key_schedule ks;
 	int i;
@@ -786,14 +789,16 @@ static int check_cookie(struct pppoe_serv_t *serv, const uint8_t *src, const uin
 	if (*(uint32_t *)(u1.raw + 20) < ts.tv_sec)
 		return 1;
 
-	MD5_Init(&ctx);
-	MD5_Update(&ctx, serv->secret, SECRET_LENGTH);
-	MD5_Update(&ctx, serv->hwaddr, ETH_ALEN);
-	MD5_Update(&ctx, src, ETH_ALEN);
+	evp_ctx = EVP_MD_CTX_new();
+	EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
+	EVP_DigestUpdate(evp_ctx, serv->secret, SECRET_LENGTH);
+	EVP_DigestUpdate(evp_ctx, serv->hwaddr, ETH_ALEN);
+	EVP_DigestUpdate(evp_ctx, src, ETH_ALEN);
 	if (relay_sid)
-		MD5_Update(&ctx, relay_sid->tag_data, ntohs(relay_sid->tag_len));
-	MD5_Final(u2.raw, &ctx);
+		EVP_DigestUpdate(evp_ctx, relay_sid->tag_data, ntohs(relay_sid->tag_len));
+	EVP_DigestFinal_ex(evp_ctx, u2.raw, NULL);
 
+	EVP_MD_CTX_free(evp_ctx);
 	return memcmp(u1.raw, u2.raw, 16);
 }
 

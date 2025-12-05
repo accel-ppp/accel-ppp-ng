@@ -6,8 +6,6 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#include <openssl/md4.h>
-#include <openssl/sha.h>
 #include <openssl/des.h>
 #include <openssl/evp.h>
 
@@ -368,7 +366,7 @@ static void des_encrypt(const uint8_t *input, const uint8_t *key, uint8_t *outpu
 static int auth_pap(struct cs_pd_t *pd, const char *username, va_list args)
 {
 	const char *passwd = va_arg(args, const char *);
-	MD4_CTX md4_ctx;
+	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
 	unsigned char z_hash[21];
 	char *u_passwd;
 	int i, len = strlen(passwd);
@@ -380,9 +378,12 @@ static int auth_pap(struct cs_pd_t *pd, const char *username, va_list args)
 	}
 
 	memset(z_hash, 0, sizeof(z_hash));
-	MD4_Init(&md4_ctx);
-	MD4_Update(&md4_ctx, u_passwd, len * 2);
-	MD4_Final(z_hash, &md4_ctx);
+
+	EVP_DigestInit_ex(evp_ctx, EVP_md4(), NULL);
+	EVP_DigestUpdate(evp_ctx, u_passwd, len * 2);
+	EVP_DigestFinal_ex(evp_ctx, z_hash, NULL);
+
+	EVP_MD_CTX_free(evp_ctx);
 
 	_free(u_passwd);
 
@@ -408,8 +409,7 @@ static int auth_chap_md5(struct cs_pd_t *pd, const char *username, va_list args)
 
 static void derive_mppe_keys_mschap_v1(struct ap_session *ses, const uint8_t *z_hash, const uint8_t *challenge, int challenge_len)
 {
-	MD4_CTX md4_ctx;
-	SHA_CTX sha_ctx;
+	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
 	uint8_t digest[20];
 	struct ppp_t *ppp = container_of(ses, typeof(*ppp), ses);
 
@@ -421,16 +421,20 @@ static void derive_mppe_keys_mschap_v1(struct ap_session *ses, const uint8_t *z_
 	};
 
 	//NtPasswordHashHash
-	MD4_Init(&md4_ctx);
-	MD4_Update(&md4_ctx, z_hash, 16);
-	MD4_Final(digest, &md4_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_md4(), NULL);
+	EVP_DigestUpdate(evp_ctx, z_hash, 16);
+	EVP_DigestFinal_ex(evp_ctx, digest, NULL);
+
+	EVP_MD_CTX_reset(evp_ctx);
 
 	//Get_Start_Key
-	SHA1_Init(&sha_ctx);
-	SHA1_Update(&sha_ctx, digest, 16);
-	SHA1_Update(&sha_ctx, digest, 16);
-	SHA1_Update(&sha_ctx, challenge, challenge_len);
-	SHA1_Final(digest, &sha_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_sha1(), NULL);
+	EVP_DigestUpdate(evp_ctx, digest, 16);
+	EVP_DigestUpdate(evp_ctx, digest, 16);
+	EVP_DigestUpdate(evp_ctx, challenge, challenge_len);
+	EVP_DigestFinal_ex(evp_ctx, digest, NULL);
+
+	EVP_MD_CTX_free(evp_ctx);
 
 	triton_event_fire(EV_MPPE_KEYS, &ev_mppe);
 }
@@ -464,10 +468,9 @@ int auth_mschap_v1(struct ap_session *ses, struct cs_pd_t *pd, const char *usern
 
 static void generate_mschap_response(const uint8_t *nt_response, const uint8_t *c_hash, const uint8_t *z_hash, char *authenticator)
 {
-	MD4_CTX md4_ctx;
-	SHA_CTX sha_ctx;
-	uint8_t pw_hash[MD4_DIGEST_LENGTH];
-	uint8_t response[SHA_DIGEST_LENGTH];
+	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
+	uint8_t pw_hash[EVP_MAX_MD_SIZE];
+	uint8_t response[EVP_MAX_MD_SIZE];
 	int i;
 
 	uint8_t magic1[39] =
@@ -483,21 +486,25 @@ static void generate_mschap_response(const uint8_t *nt_response, const uint8_t *
           0x6E};
 
 
-	MD4_Init(&md4_ctx);
-	MD4_Update(&md4_ctx, z_hash, 16);
-	MD4_Final(pw_hash, &md4_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_md4(), NULL);
+	EVP_DigestUpdate(evp_ctx, z_hash, 16);
+	EVP_DigestFinal_ex(evp_ctx, pw_hash, NULL);
 
-	SHA1_Init(&sha_ctx);
-	SHA1_Update(&sha_ctx, pw_hash, 16);
-	SHA1_Update(&sha_ctx, nt_response, 24);
-	SHA1_Update(&sha_ctx, magic1, 39);
-	SHA1_Final(response, &sha_ctx);
+	EVP_MD_CTX_reset(evp_ctx);
 
-	SHA1_Init(&sha_ctx);
-	SHA1_Update(&sha_ctx, response, 20);
-	SHA1_Update(&sha_ctx, c_hash, 8);
-	SHA1_Update(&sha_ctx, magic2, 41);
-	SHA1_Final(response, &sha_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_sha1(), NULL);
+	EVP_DigestUpdate(evp_ctx, pw_hash, 16);
+	EVP_DigestUpdate(evp_ctx, nt_response, 24);
+	EVP_DigestUpdate(evp_ctx, magic1, 39);
+	EVP_DigestFinal_ex(evp_ctx, response, NULL);
+
+	EVP_DigestInit_ex(evp_ctx, EVP_sha1(), NULL);
+	EVP_DigestUpdate(evp_ctx, response, 20);
+	EVP_DigestUpdate(evp_ctx, c_hash, 8);
+	EVP_DigestUpdate(evp_ctx, magic2, 41);
+	EVP_DigestFinal_ex(evp_ctx, response, NULL);
+
+	EVP_MD_CTX_free(evp_ctx);
 
 	for (i = 0; i < 20; i++)
 		sprintf(authenticator + i*2, "%02X", response[i]);
@@ -506,8 +513,7 @@ static void generate_mschap_response(const uint8_t *nt_response, const uint8_t *
 static void derive_mppe_keys_mschap_v2(struct ap_session *ses, const uint8_t *z_hash, const uint8_t *nt_hash)
 {
 	struct ppp_t *ppp = container_of(ses, typeof(*ppp), ses);
-	MD4_CTX md4_ctx;
-	SHA_CTX sha_ctx;
+	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
 	uint8_t digest[20];
 	uint8_t send_key[20];
 	uint8_t recv_key[20];
@@ -559,32 +565,36 @@ static void derive_mppe_keys_mschap_v2(struct ap_session *ses, const uint8_t *z_
 	};
 
 	//NtPasswordHashHash
-	MD4_Init(&md4_ctx);
-	MD4_Update(&md4_ctx, z_hash, 16);
-	MD4_Final(digest, &md4_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_md4(), NULL);
+	EVP_DigestUpdate(evp_ctx, z_hash, 16);
+	EVP_DigestFinal_ex(evp_ctx, digest, NULL);
+
+	EVP_MD_CTX_reset(evp_ctx);
 
 	//GetMasterKey
-	SHA1_Init(&sha_ctx);
-	SHA1_Update(&sha_ctx, digest, 16);
-	SHA1_Update(&sha_ctx, nt_hash, 24);
-	SHA1_Update(&sha_ctx, magic1, sizeof(magic1));
-	SHA1_Final(digest, &sha_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_sha1(), NULL);
+	EVP_DigestUpdate(evp_ctx, digest, 16);
+	EVP_DigestUpdate(evp_ctx, nt_hash, 24);
+	EVP_DigestUpdate(evp_ctx, magic1, sizeof(magic1));
+	EVP_DigestFinal_ex(evp_ctx, digest, NULL);
 
 	//send key
-	SHA1_Init(&sha_ctx);
-	SHA1_Update(&sha_ctx, digest, 16);
-	SHA1_Update(&sha_ctx, pad1, sizeof(pad1));
-	SHA1_Update(&sha_ctx, magic3, sizeof(magic2));
-	SHA1_Update(&sha_ctx, pad2, sizeof(pad2));
-	SHA1_Final(send_key, &sha_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_sha1(), NULL);
+	EVP_DigestUpdate(evp_ctx, digest, 16);
+	EVP_DigestUpdate(evp_ctx, pad1, sizeof(pad1));
+	EVP_DigestUpdate(evp_ctx, magic3, sizeof(magic3));
+	EVP_DigestUpdate(evp_ctx, pad2, sizeof(pad2));
+	EVP_DigestFinal_ex(evp_ctx, send_key, NULL);
 
 	//recv key
-	SHA1_Init(&sha_ctx);
-	SHA1_Update(&sha_ctx, digest, 16);
-	SHA1_Update(&sha_ctx, pad1, sizeof(pad1));
-	SHA1_Update(&sha_ctx, magic2, sizeof(magic3));
-	SHA1_Update(&sha_ctx, pad2, sizeof(pad2));
-	SHA1_Final(recv_key, &sha_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_sha1(), NULL);
+	EVP_DigestUpdate(evp_ctx, digest, 16);
+	EVP_DigestUpdate(evp_ctx, pad1, sizeof(pad1));
+	EVP_DigestUpdate(evp_ctx, magic2, sizeof(magic2));
+	EVP_DigestUpdate(evp_ctx, pad2, sizeof(pad2));
+	EVP_DigestFinal_ex(evp_ctx, recv_key, NULL);
+
+	EVP_MD_CTX_free(evp_ctx);
 
 	triton_event_fire(EV_MPPE_KEYS, &ev_mppe);
 }
@@ -600,14 +610,16 @@ int auth_mschap_v2(struct ap_session *ses, struct cs_pd_t *pd, const char *usern
 	char *authenticator = va_arg(args, char *);
 	uint8_t z_hash[21];
 	uint8_t nt_hash[24];
-	uint8_t c_hash[SHA_DIGEST_LENGTH];
-	SHA_CTX sha_ctx;
+	uint8_t c_hash[EVP_MAX_MD_SIZE];
+	EVP_MD_CTX *sha_ctx = EVP_MD_CTX_new();
 
-	SHA1_Init(&sha_ctx);
-	SHA1_Update(&sha_ctx, peer_challenge, 16);
-	SHA1_Update(&sha_ctx, challenge, 16);
-	SHA1_Update(&sha_ctx, username, strlen(username));
-	SHA1_Final(c_hash, &sha_ctx);
+	EVP_DigestInit_ex(sha_ctx, EVP_sha1(), NULL);
+	EVP_DigestUpdate(sha_ctx, peer_challenge, 16);
+	EVP_DigestUpdate(sha_ctx, challenge, 16);
+	EVP_DigestUpdate(sha_ctx, username, strlen(username));
+	EVP_DigestFinal_ex(sha_ctx, c_hash, NULL);
+
+	EVP_MD_CTX_free(sha_ctx);
 
 	memcpy(z_hash, pd->passwd, 16);
 	memset(z_hash + 16, 0, sizeof(z_hash) - 16);

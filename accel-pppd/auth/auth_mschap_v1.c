@@ -8,9 +8,8 @@
 #include <byteswap.h>
 #include <arpa/inet.h>
 
-#include <openssl/md4.h>
-#include <openssl/sha.h>
 #include <openssl/des.h>
+#include <openssl/evp.h>
 
 #include "log.h"
 #include "ppp.h"
@@ -426,7 +425,7 @@ static void des_encrypt(const uint8_t *input, const uint8_t *key, uint8_t *outpu
 
 static int chap_check_response(struct chap_auth_data *ad, struct chap_response *msg, const char *name)
 {
-	MD4_CTX md4_ctx;
+	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
 	uint8_t z_hash[21];
 	uint8_t nt_hash[24];
 	char *passwd;
@@ -447,9 +446,11 @@ static int chap_check_response(struct chap_auth_data *ad, struct chap_response *
 	}
 
 	memset(z_hash, 0, sizeof(z_hash));
-	MD4_Init(&md4_ctx);
-	MD4_Update(&md4_ctx, u_passwd, strlen(passwd) * 2);
-	MD4_Final(z_hash, &md4_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_md4(), NULL);
+	EVP_DigestUpdate(evp_ctx, u_passwd, strlen(passwd) * 2);
+	EVP_DigestFinal_ex(evp_ctx, z_hash, NULL);
+
+	EVP_MD_CTX_free(evp_ctx);
 
 	des_encrypt(ad->val, z_hash, nt_hash);
 	des_encrypt(ad->val, z_hash + 7, nt_hash + 8);
@@ -470,8 +471,7 @@ static int chap_check(uint8_t *ptr)
 
 static void set_mppe_keys(struct chap_auth_data *ad, uint8_t *z_hash)
 {
-	MD4_CTX md4_ctx;
-	SHA_CTX sha_ctx;
+	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
 	uint8_t digest[20];
 
 	struct ev_mppe_keys_t ev_mppe = {
@@ -482,16 +482,20 @@ static void set_mppe_keys(struct chap_auth_data *ad, uint8_t *z_hash)
 	};
 
 	//NtPasswordHashHash
-	MD4_Init(&md4_ctx);
-	MD4_Update(&md4_ctx, z_hash, 16);
-	MD4_Final(digest, &md4_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_md4(), NULL);
+	EVP_DigestUpdate(evp_ctx, z_hash, 16);
+	EVP_DigestFinal_ex(evp_ctx, digest, NULL);
+
+	EVP_MD_CTX_reset(evp_ctx);
 
 	//Get_Start_Key
-	SHA1_Init(&sha_ctx);
-	SHA1_Update(&sha_ctx, digest, 16);
-	SHA1_Update(&sha_ctx, digest, 16);
-	SHA1_Update(&sha_ctx, ad->val, VALUE_SIZE);
-	SHA1_Final(digest, &sha_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_sha1(), NULL);
+	EVP_DigestUpdate(evp_ctx, digest, 16);
+	EVP_DigestUpdate(evp_ctx, digest, 16);
+	EVP_DigestUpdate(evp_ctx, ad->val, VALUE_SIZE);
+	EVP_DigestFinal_ex(evp_ctx, digest, NULL);
+
+	EVP_MD_CTX_free(evp_ctx);
 
 	triton_event_fire(EV_MPPE_KEYS, &ev_mppe);
 }

@@ -10,7 +10,7 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 
-#include <openssl/md5.h>
+#include <openssl/evp.h>
 
 #include "triton.h"
 #include "events.h"
@@ -34,28 +34,32 @@ static struct dm_coa_serv_t serv;
 static int dm_coa_check_RA(struct rad_packet_t *pack, const char *secret)
 {
 	uint8_t RA[16];
-	MD5_CTX ctx;
+	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
 
 	memset(RA, 0, 16);
 
-	MD5_Init(&ctx);
-	MD5_Update(&ctx, pack->buf, 4);
-	MD5_Update(&ctx, RA, 16);
-	MD5_Update(&ctx, pack->buf + 20, pack->len - 20);
-	MD5_Update(&ctx, secret, strlen(secret));
-	MD5_Final(RA, &ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
+	EVP_DigestUpdate(evp_ctx, pack->buf, 4);
+	EVP_DigestUpdate(evp_ctx, RA, 16);
+	EVP_DigestUpdate(evp_ctx, pack->buf + 20, pack->len - 20);
+	EVP_DigestUpdate(evp_ctx, secret, strlen(secret));
+	EVP_DigestFinal_ex(evp_ctx, RA, NULL);
+
+	EVP_MD_CTX_free(evp_ctx);
 
 	return memcmp(RA, pack->buf + 4, 16);
 }
 
 static void dm_coa_set_RA(struct rad_packet_t *pack, const char *secret)
 {
-	MD5_CTX ctx;
+	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
 
-	MD5_Init(&ctx);
-	MD5_Update(&ctx, pack->buf, pack->len);
-	MD5_Update(&ctx, secret, strlen(secret));
-	MD5_Final(pack->buf + 4, &ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
+	EVP_DigestUpdate(evp_ctx, pack->buf, pack->len);
+	EVP_DigestUpdate(evp_ctx, secret, strlen(secret));
+	EVP_DigestFinal_ex(evp_ctx, pack->buf + 4, NULL);
+
+	EVP_MD_CTX_free(evp_ctx);
 }
 
 static int dm_coa_send_ack(int fd, struct rad_packet_t *req, struct sockaddr_in *addr)
