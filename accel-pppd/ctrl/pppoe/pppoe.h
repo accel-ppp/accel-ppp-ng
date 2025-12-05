@@ -6,8 +6,8 @@
 #include <linux/if.h>
 #include <linux/if_pppox.h>
 
-#include <openssl/md5.h>
-#include <openssl/des.h>
+#include <openssl/evp.h>
+#include <openssl/rand.h>
 
 #include "rbtree.h"
 
@@ -89,7 +89,8 @@ struct pppoe_serv_t
 	struct triton_timer_t timer;
 
 	uint8_t secret[SECRET_LENGTH];
-	DES_key_schedule des_ks;
+	EVP_CIPHER_CTX *des_enc_ctx;
+	EVP_CIPHER_CTX *des_dec_ctx;
 
 	pthread_mutex_t lock;
 

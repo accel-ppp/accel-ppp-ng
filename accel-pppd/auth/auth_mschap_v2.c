@@ -489,9 +489,8 @@ static void des_encrypt(const uint8_t *input, const uint8_t *key, uint8_t *outpu
 		uint64_t u64;
 		uint8_t buf[8];
 	} p_key;
-	DES_cblock cb;
-	DES_cblock res;
-	DES_key_schedule ks;
+	unsigned char cb[EVP_MAX_KEY_LENGTH];
+	EVP_CIPHER_CTX *des_ctx = EVP_CIPHER_CTX_new();
 
 	memcpy(p_key.buf,key,7);
 	p_key.u64 = be64toh(p_key.u64);
@@ -504,10 +503,10 @@ static void des_encrypt(const uint8_t *input, const uint8_t *key, uint8_t *outpu
 		cb[i]|=(~parity)&1;
 	}
 
-	DES_set_key_checked(&cb, &ks);
-	memcpy(cb,input,8);
-	DES_ecb_encrypt(&cb,&res,&ks,DES_ENCRYPT);
-	memcpy(output,res,8);
+	EVP_EncryptInit_ex(des_ctx, EVP_des_ecb(), NULL, cb, NULL);
+	EVP_EncryptUpdate(des_ctx, output, NULL, input, EVP_CIPHER_block_size(EVP_des_ecb()));
+
+	EVP_CIPHER_CTX_free(des_ctx);
 }
 
 static int chap_check_response(struct chap_auth_data *ad, struct chap_response *msg, const char *name)

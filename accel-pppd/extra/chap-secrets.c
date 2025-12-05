@@ -342,9 +342,9 @@ static void des_encrypt(const uint8_t *input, const uint8_t *key, uint8_t *outpu
 		uint64_t u64;
 		uint8_t buf[8];
 	} p_key;
-	DES_cblock cb;
-	DES_cblock res;
-	DES_key_schedule ks;
+
+	unsigned char cb[EVP_MAX_KEY_LENGTH];
+	EVP_CIPHER_CTX *evp_ctx = EVP_CIPHER_CTX_new();
 
 	memcpy(p_key.buf, key, 7);
 	p_key.u64 = be64toh(p_key.u64);
@@ -357,10 +357,9 @@ static void des_encrypt(const uint8_t *input, const uint8_t *key, uint8_t *outpu
 		cb[i] |= (~parity) & 1;
 	}
 
-	DES_set_key_checked(&cb, &ks);
-	memcpy(cb, input, 8);
-	DES_ecb_encrypt(&cb, &res, &ks, DES_ENCRYPT);
-	memcpy(output, res, 8);
+	EVP_EncryptInit_ex(evp_ctx, EVP_des_ecb(), NULL, cb, NULL);
+	EVP_EncryptUpdate(evp_ctx, output, NULL, input, EVP_CIPHER_block_size(EVP_des_ecb()));
+	EVP_CIPHER_CTX_free(evp_ctx);
 }
 
 static int auth_pap(struct cs_pd_t *pd, const char *username, va_list args)
