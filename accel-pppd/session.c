@@ -86,7 +86,6 @@ void __export ap_session_init(struct ap_session *ses)
 
 #ifdef HAVE_SESSION_HOOKS
 	ses->hooks = NULL;
-	ses->hooks_priv_data = NULL;
 #endif /* HAVE_SESSION_HOOKS */
 
 	ses->vrf_name = NULL;

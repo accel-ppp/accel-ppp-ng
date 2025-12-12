@@ -167,7 +167,7 @@ exit:
 
 static void vpppolicer_generate_name(char *name, size_t size, struct ap_session *ses, uint32_t rate, uint64_t burst, int is_up)
 {
-	snprintf(name, size, "vyos_%d_%d_%ld_%s", VPPHOOK_GET_PRIV(ses)->vpp_sw_if_index, rate, burst, is_up ? "up" : "down");
+	snprintf(name, size, "vyos_%d_%d_%ld_%s", vpphook_get_pd(ses)->vpp_sw_if_index, rate, burst, is_up ? "up" : "down");
 }
 
 int vpppolicer_install_limiter(struct ap_session *ses, int down_speed, int down_burst, int up_speed, int up_burst)
@@ -175,7 +175,7 @@ int vpppolicer_install_limiter(struct ap_session *ses, int down_speed, int down_
 	int ret = 0;
 	char policer_input[POLICER_NAME_MAX_LEN] = {};
 	char policer_output[POLICER_NAME_MAX_LEN] = {};
-	struct vpphook_private_data_t *vpphook_data = VPPHOOK_GET_PRIV(ses);
+	struct vpphook_private_data_t *vpphook_data = vpphook_get_pd(ses);
 
 	/* convert rate to kbits/s and burst to bits */
 	down_speed = down_speed * 8 / 1000;
@@ -232,7 +232,7 @@ int vpppolicer_remove_limiter(struct ap_session *ses)
 	int ret = 0;
 	char policer_input[64] = {};
 	char policer_output[64] = {};
-	struct vpphook_private_data_t *vpphook_data = VPPHOOK_GET_PRIV(ses);
+	struct vpphook_private_data_t *vpphook_data = vpphook_get_pd(ses);
 
 	if (vpphook_data->vpppolicer_down) {
 		vpppolicer_generate_name(policer_output, POLICER_NAME_MAX_LEN - 1, ses, vpphook_data->vpppolicer_down, vpphook_data->vpppolicer_down_burst, 0);

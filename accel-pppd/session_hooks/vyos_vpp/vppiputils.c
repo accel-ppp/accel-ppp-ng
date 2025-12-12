@@ -38,7 +38,7 @@ struct vpp_route_t {
 static void vpp_iproute_save(struct ap_session *ses, in_addr_t dst, int mask)
 {
 	struct vpp_route_t *saved_route = (struct vpp_route_t *)malloc(sizeof(*saved_route));
-	struct vpphook_private_data_t *vpphook_data = VPPHOOK_GET_PRIV(ses);
+	struct vpphook_private_data_t *vpphook_data = vpphook_get_pd(ses);
 	saved_route->af = AF_INET;
 	memcpy(&saved_route->un.ip4.dst, &dst, sizeof(dst));
 	saved_route->un.ip4.mask = mask;
@@ -48,7 +48,7 @@ static void vpp_iproute_save(struct ap_session *ses, in_addr_t dst, int mask)
 static void vpp_iproute_del_saved(struct ap_session *ses, in_addr_t dst, int mask)
 {
 	struct list_head *pos, *n;
-	struct vpphook_private_data_t *vpphook_data = VPPHOOK_GET_PRIV(ses);
+	struct vpphook_private_data_t *vpphook_data = vpphook_get_pd(ses);
 
 	list_for_each_safe(pos, n, &vpphook_data->vpp_routes) {
 		struct vpp_route_t *saved_route = list_entry(pos, typeof(*saved_route), entry);
@@ -63,7 +63,7 @@ static void vpp_iproute_del_saved(struct ap_session *ses, in_addr_t dst, int mas
 static void vpp_ip6route_save(struct ap_session *ses, const struct in6_addr *dst, int pref_len)
 {
 	struct vpp_route_t *saved_route = (struct vpp_route_t *)malloc(sizeof(*saved_route));
-	struct vpphook_private_data_t *vpphook_data = VPPHOOK_GET_PRIV(ses);
+	struct vpphook_private_data_t *vpphook_data = vpphook_get_pd(ses);
 	saved_route->af = AF_INET6;
 	memcpy(&saved_route->un.ip6.dst, dst, sizeof(*dst));
 	saved_route->un.ip6.preffix = pref_len;
@@ -73,7 +73,7 @@ static void vpp_ip6route_save(struct ap_session *ses, const struct in6_addr *dst
 static void vpp_ip6route_del_saved(struct ap_session *ses, const struct in6_addr *dst, int pref_len)
 {
 	struct list_head *pos, *n;
-	struct vpphook_private_data_t *vpphook_data = VPPHOOK_GET_PRIV(ses);
+	struct vpphook_private_data_t *vpphook_data = vpphook_get_pd(ses);
 
 	list_for_each_safe(pos, n, &vpphook_data->vpp_routes) {
 		struct vpp_route_t *saved_route = list_entry(pos, typeof(*saved_route), entry);
@@ -187,7 +187,7 @@ int vpp_ip6route_add_del(struct ap_session *ses, int is_add, int ifindex, const 
 int vpp_iproute_flush(struct ap_session *ses)
 {
 	struct list_head *pos, *n;
-	struct vpphook_private_data_t *vpphook_data = VPPHOOK_GET_PRIV(ses);
+	struct vpphook_private_data_t *vpphook_data = vpphook_get_pd(ses);
 
 	list_for_each_safe(pos, n, &vpphook_data->vpp_routes) {
 		struct vpp_route_t *saved_route = list_entry(pos, typeof(*saved_route), entry);

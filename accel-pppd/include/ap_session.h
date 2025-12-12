@@ -130,7 +130,6 @@ struct ap_session
 
 #ifdef HAVE_SESSION_HOOKS
 	struct ap_session_hooks_t *hooks;
-	void *hooks_priv_data; /* private data for hooks */
 #endif /* HAVE_SESSION_HOOKS */
 };
 

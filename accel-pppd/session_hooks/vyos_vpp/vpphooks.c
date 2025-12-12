@@ -26,20 +26,44 @@
 /* NOTE: function from ctrl/pppoe plugin! */
 void pppoe_get_session_mac_and_sid(struct ap_session *ses, uint8_t **mac, uint16_t *sid);
 
+static void *pd_key;
+
+struct vpphook_private_data_t *vpphook_get_pd(struct ap_session *ses)
+{
+	struct ap_private *pd;
+
+	list_for_each_entry(pd, &ses->pd_list, entry) {
+		if (pd->key == &pd_key)
+			return container_of(pd, struct vpphook_private_data_t, pd);
+	}
+
+	return NULL;
+}
+
 int vpphook_session_hook_init(struct ap_session *ses)
 {
-	ses->hooks_priv_data = _malloc(sizeof(struct vpphook_private_data_t));
-	memset(ses->hooks_priv_data, 0, sizeof(struct vpphook_private_data_t));
+	struct vpphook_private_data_t *pd = _malloc(sizeof(struct vpphook_private_data_t));
+	if (pd == NULL)
+		return -1;
 
-	INIT_LIST_HEAD(&VPPHOOK_GET_PRIV(ses)->vpp_routes);
+	memset(pd, 0, sizeof(struct vpphook_private_data_t));
+	pd->pd.key = &pd_key;
 
-	return ses->hooks_priv_data == NULL ? -1 : 0; /* return 0 is ok */
+	INIT_LIST_HEAD(&pd->vpp_routes);
+
+	list_add_tail(&pd->pd.entry, &ses->pd_list);
+
+	return 0; /* return 0 is ok */
 }
 
 void vpphook_session_hook_deinit(struct ap_session *ses)
 {
-	_free(ses->hooks_priv_data);
-	ses->hooks_priv_data = NULL;
+	struct vpphook_private_data_t *pd = vpphook_get_pd(ses);
+	if (pd == NULL)
+		return;
+
+	list_del(&pd->pd.entry);
+	_free(pd);
 }
 
 int vpphook_pppoe_create_vpp_session_interface(struct ap_session *ses)
@@ -56,7 +80,7 @@ int vpphook_pppoe_create_vpp_session_interface(struct ap_session *ses)
 		return ret;
 	}
 
-	VPPHOOK_GET_PRIV(ses)->vpp_sw_if_index = ifindex;
+	vpphook_get_pd(ses)->vpp_sw_if_index = ifindex;
 	vpppoe_dump_interface_name(ifindex, ses->ifname, AP_IFNAME_LEN);
 
 	if (ses->ipv4) {
@@ -92,73 +116,73 @@ exit:
 
 int vpphook_ipaddr_add(struct ap_session *ses, int ifindex, in_addr_t addr, int mask)
 {
-	uint32_t sw_ifindex = VPPHOOK_GET_PRIV(ses)->vpp_sw_if_index;
+	uint32_t sw_ifindex = vpphook_get_pd(ses)->vpp_sw_if_index;
 	/* setup route instead */
 	return vpp_iproute_add_del(ses, 1, sw_ifindex, 0, addr, 0, 0, mask, 0);
 }
 
 int vpphook_ipaddr_add_peer(struct ap_session *ses, int ifindex, in_addr_t addr, in_addr_t peer_addr)
 {
-	uint32_t sw_ifindex = VPPHOOK_GET_PRIV(ses)->vpp_sw_if_index;
+	uint32_t sw_ifindex = vpphook_get_pd(ses)->vpp_sw_if_index;
 	/* setup route instead */
 	return vpp_iproute_add_del(ses, 1, sw_ifindex, 0, peer_addr, 0, 0, 32, 0);
 }
 
 int vpphook_ipaddr_del(struct ap_session *ses, int ifindex, in_addr_t addr, int mask)
 {
-	uint32_t sw_ifindex = VPPHOOK_GET_PRIV(ses)->vpp_sw_if_index;
+	uint32_t sw_ifindex = vpphook_get_pd(ses)->vpp_sw_if_index;
 	/* remove route instead */
 	return vpp_iproute_add_del(ses, 0, sw_ifindex, 0, addr, 0, 0, mask, 0);
 }
 
 int vpphook_ipaddr_del_peer(struct ap_session *ses, int ifindex, in_addr_t addr, in_addr_t peer)
 {
-	uint32_t sw_ifindex = VPPHOOK_GET_PRIV(ses)->vpp_sw_if_index;
+	uint32_t sw_ifindex = vpphook_get_pd(ses)->vpp_sw_if_index;
 	/* remove route instead */
 	return vpp_iproute_add_del(ses, 0, sw_ifindex, 0, peer, 0, 0, 32, 0);
 }
 
 int vpphook_iproute_add(struct ap_session *ses, int ifindex, in_addr_t src, in_addr_t dst, in_addr_t gw, int proto, int mask, uint32_t prio, const char *vrf_name)
 {
-	uint32_t sw_ifindex = VPPHOOK_GET_PRIV(ses)->vpp_sw_if_index;
+	uint32_t sw_ifindex = vpphook_get_pd(ses)->vpp_sw_if_index;
 	return vpp_iproute_add_del(ses, 1, sw_ifindex, src, dst, gw, proto, mask, prio);
 }
 
 int vpphook_iproute_del(struct ap_session *ses, int ifindex, in_addr_t src, in_addr_t dst, in_addr_t gw, int proto, int mask, uint32_t prio, const char *vrf_name)
 {
-	uint32_t sw_ifindex = VPPHOOK_GET_PRIV(ses)->vpp_sw_if_index;
+	uint32_t sw_ifindex = vpphook_get_pd(ses)->vpp_sw_if_index;
 	return vpp_iproute_add_del(ses, 0, sw_ifindex, src, dst, gw, proto, mask, prio);
 }
 
 int vpphook_ip6route_add(struct ap_session *ses, int ifindex, const struct in6_addr *dst, int pref_len, const struct in6_addr *gw, int proto, uint32_t prio, const char *vrf_name)
 {
-	uint32_t sw_ifindex = VPPHOOK_GET_PRIV(ses)->vpp_sw_if_index;
+	uint32_t sw_ifindex = vpphook_get_pd(ses)->vpp_sw_if_index;
 	return vpp_ip6route_add_del(ses, 1, sw_ifindex, dst, pref_len, gw, proto, prio);
 }
 
 int vpphook_ip6route_del(struct ap_session *ses, int ifindex, const struct in6_addr *dst, int pref_len, const struct in6_addr *gw, int proto, uint32_t prio, const char *vrf_name)
 {
-	uint32_t sw_ifindex = VPPHOOK_GET_PRIV(ses)->vpp_sw_if_index;
+	uint32_t sw_ifindex = vpphook_get_pd(ses)->vpp_sw_if_index;
 	return vpp_ip6route_add_del(ses, 0, sw_ifindex, dst, pref_len, gw, proto, prio);
 }
 
 int vpphook_ip6addr_add(struct ap_session *ses, int ifindex, struct in6_addr *addr, int prefix_len)
 {
-	uint32_t sw_ifindex = VPPHOOK_GET_PRIV(ses)->vpp_sw_if_index;
+	uint32_t sw_ifindex = vpphook_get_pd(ses)->vpp_sw_if_index;
 	/* setup route instead */
 	return vpp_ip6route_add_del(ses, 1, sw_ifindex, addr, prefix_len, NULL, 0, 0);
 }
 
 int vpphook_ip6addr_add_peer(struct ap_session *ses, int ifindex, struct in6_addr *addr, struct in6_addr *peer_addr)
 {
-	uint32_t sw_ifindex = VPPHOOK_GET_PRIV(ses)->vpp_sw_if_index;
+	uint32_t sw_ifindex = vpphook_get_pd(ses)->vpp_sw_if_index;
 	/* setup route instead */
 	return vpp_ip6route_add_del(ses, 1, sw_ifindex, peer_addr, 128, NULL, 0, 0);
 }
 
 int vpphook_ip6addr_del(struct ap_session *ses, int ifindex, struct in6_addr *addr, int prefix_len)
 {
-	uint32_t sw_ifindex = VPPHOOK_GET_PRIV(ses)->vpp_sw_if_index;
+	uint32_t sw_ifindex = vpphook_get_pd(ses)->vpp_sw_if_index;
 	/* remove route instead */
 	return vpp_ip6route_add_del(ses, 0, sw_ifindex, addr, prefix_len, NULL, 0, 0);
 }
