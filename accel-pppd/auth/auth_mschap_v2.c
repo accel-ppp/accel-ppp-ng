@@ -260,6 +260,13 @@ static int generate_response(struct chap_auth_data *ad, struct chap_response *ms
 	}
 
 	evp_ctx = EVP_MD_CTX_new();
+	if (evp_ctx == NULL) {
+		_free(u_passwd);
+		_free(passwd);
+		if (conf_ppp_verbose)
+			log_ppp_error("mschap-v2: can't create EVP context\n");
+		return -1;
+	}
 
 	EVP_DigestInit_ex(evp_ctx, EVP_md4(), NULL);
 	EVP_DigestUpdate(evp_ctx, u_passwd, strlen(passwd)*2);
@@ -483,14 +490,20 @@ static void chap_recv_response(struct chap_auth_data *ad, struct chap_hdr *hdr)
 
 static void des_encrypt(const uint8_t *input, const uint8_t *key, uint8_t *output)
 {
-	int i,j,parity;
+	int i,j,parity,outl;
 	union
 	{
 		uint64_t u64;
 		uint8_t buf[8];
 	} p_key;
 	unsigned char cb[EVP_MAX_KEY_LENGTH];
+	unsigned char padding[EVP_MAX_BLOCK_LENGTH];
 	EVP_CIPHER_CTX *des_ctx = EVP_CIPHER_CTX_new();
+	if (des_ctx == NULL) {
+		if (conf_ppp_verbose)
+			log_ppp_error("mschap-v2: can't create EVP cipher context\n");
+		return;
+	}
 
 	memcpy(p_key.buf,key,7);
 	p_key.u64 = be64toh(p_key.u64);
@@ -504,7 +517,9 @@ static void des_encrypt(const uint8_t *input, const uint8_t *key, uint8_t *outpu
 	}
 
 	EVP_EncryptInit_ex(des_ctx, EVP_des_ecb(), NULL, cb, NULL);
-	EVP_EncryptUpdate(des_ctx, output, NULL, input, EVP_CIPHER_block_size(EVP_des_ecb()));
+	EVP_CIPHER_CTX_set_padding(des_ctx, 0);
+	EVP_EncryptUpdate(des_ctx, output, &outl, input, EVP_CIPHER_block_size(EVP_des_ecb()));
+	EVP_EncryptFinal_ex(des_ctx, padding, &outl);
 
 	EVP_CIPHER_CTX_free(des_ctx);
 }
@@ -533,6 +548,13 @@ static int chap_check_response(struct chap_auth_data *ad, struct chap_response *
 	}
 
 	evp_ctx = EVP_MD_CTX_new();
+	if (evp_ctx == NULL) {
+		_free(u_passwd);
+		_free(passwd);
+		if (conf_ppp_verbose)
+			log_ppp_error("mschap-v2: can't create EVP context\n");
+		return -1;
+	}
 
 	EVP_DigestInit_ex(evp_ctx, EVP_sha1(), NULL);
 	EVP_DigestUpdate(evp_ctx, msg->peer_challenge, 16);
@@ -614,6 +636,12 @@ static void set_mppe_keys(struct chap_auth_data *ad, uint8_t *z_hash, uint8_t *n
 		.send_key = send_key,
 	};
 
+	if (evp_ctx == NULL) {
+		if (conf_ppp_verbose)
+			log_ppp_error("mschap-v2: can't create EVP context\n");
+		return;
+	}
+
 	//NtPasswordHashHash
 	EVP_DigestInit_ex(evp_ctx, EVP_md4(), NULL);
 	EVP_DigestUpdate(evp_ctx, z_hash, 16);
@@ -642,7 +670,7 @@ static void set_mppe_keys(struct chap_auth_data *ad, uint8_t *z_hash, uint8_t *n
 	EVP_DigestUpdate(evp_ctx, pad1, sizeof(pad1));
 	EVP_DigestUpdate(evp_ctx, magic2, sizeof(magic2));
 	EVP_DigestUpdate(evp_ctx, pad2, sizeof(pad2));
-	EVP_DigestFinal_ex(evp_ctx, send_key, NULL);
+	EVP_DigestFinal_ex(evp_ctx, recv_key, NULL);
 
 	EVP_MD_CTX_free(evp_ctx);
 

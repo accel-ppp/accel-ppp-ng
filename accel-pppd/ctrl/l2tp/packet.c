@@ -160,6 +160,12 @@ static int decode_avp(struct l2tp_avp_t *avp, const struct l2tp_attr_t *RV,
 	uint16_t bytes_left;
 	uint16_t blocks_left;
 	uint16_t last_block_len;
+	size_t md5_digest_length = EVP_MD_get_size(EVP_md5());
+
+	if (evp_ctx == NULL) {
+		log_warn("l2tp: can't create EVP context\n");
+		return -1;
+	}
 
 	avp_len = avp->flags & L2TP_AVP_LEN_MASK;
 	if (avp_len < sizeof(struct l2tp_avp_t) + 2) {
@@ -180,18 +186,18 @@ static int decode_avp(struct l2tp_avp_t *avp, const struct l2tp_attr_t *RV,
 	EVP_DigestUpdate(evp_ctx, RV->val.octets, RV->length);
 	EVP_DigestFinal_ex(evp_ctx, p1, NULL);
 
-	if (attr_len <= EVP_MD_get_size(EVP_md5())) {
+	if (attr_len <= md5_digest_length) {
 		memxor(avp->val, p1, attr_len);
 		EVP_MD_CTX_free(evp_ctx);
 		return 0;
 	}
 
-	memxor(p1, avp->val, EVP_MD_get_size(EVP_md5()));
+	memxor(p1, avp->val, md5_digest_length);
 	orig_attr_len = ntohs(*(uint16_t *)p1);
 
-	if (orig_attr_len <= EVP_MD_get_size(EVP_md5()) - 2) {
+	if (orig_attr_len <= md5_digest_length - 2) {
 		/* Enough bytes decoded already, no need to decode padding */
-		memcpy(avp->val, p1, EVP_MD_get_size(EVP_md5()));
+		memcpy(avp->val, p1, md5_digest_length);
 		EVP_MD_CTX_free(evp_ctx);
 		return 0;
 	}
@@ -208,29 +214,29 @@ static int decode_avp(struct l2tp_avp_t *avp, const struct l2tp_attr_t *RV,
 
 	/* Decode remaining blocks. Start from the last block as
 	   preceding blocks must be kept hidden for computing MD5s */
-	bytes_left = orig_attr_len + 2 - EVP_MD_get_size(EVP_md5());
-	last_block_len = bytes_left % EVP_MD_get_size(EVP_md5());
-	blocks_left = bytes_left / EVP_MD_get_size(EVP_md5());
+	bytes_left = orig_attr_len + 2 - md5_digest_length;
+	last_block_len = bytes_left % md5_digest_length;
+	blocks_left = bytes_left / md5_digest_length;
 	if (last_block_len) {
-		prev_block = avp->val + blocks_left * EVP_MD_get_size(EVP_md5());
+		prev_block = avp->val + blocks_left * md5_digest_length;
 		EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
 		EVP_DigestUpdate(evp_ctx, secret, secret_len);
-		EVP_DigestUpdate(evp_ctx, prev_block, EVP_MD_get_size(EVP_md5()));
+		EVP_DigestUpdate(evp_ctx, prev_block, md5_digest_length);
 		EVP_DigestFinal_ex(evp_ctx, md5, NULL);
-		memxor(prev_block + EVP_MD_get_size(EVP_md5()), md5, last_block_len);
-		prev_block -= EVP_MD_get_size(EVP_md5());
+		memxor(prev_block + md5_digest_length, md5, last_block_len);
+		prev_block -= md5_digest_length;
 	} else
-		prev_block = avp->val + (blocks_left - 1) * EVP_MD_get_size(EVP_md5());
+		prev_block = avp->val + (blocks_left - 1) * md5_digest_length;
 
 	while (prev_block >= avp->val) {
 		EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
 		EVP_DigestUpdate(evp_ctx, secret, secret_len);
-		EVP_DigestUpdate(evp_ctx, prev_block, EVP_MD_get_size(EVP_md5()));
+		EVP_DigestUpdate(evp_ctx, prev_block, md5_digest_length);
 		EVP_DigestFinal_ex(evp_ctx, md5, NULL);
-		memxor(prev_block + EVP_MD_get_size(EVP_md5()), md5, EVP_MD_get_size(EVP_md5()));
-		prev_block -= EVP_MD_get_size(EVP_md5());
+		memxor(prev_block + md5_digest_length, md5, md5_digest_length);
+		prev_block -= md5_digest_length;
 	}
-	memcpy(avp->val, p1, EVP_MD_get_size(EVP_md5()));
+	memcpy(avp->val, p1, md5_digest_length);
 
 	EVP_MD_CTX_free(evp_ctx);
 	return 0;
@@ -590,7 +596,13 @@ int encode_attr(const struct l2tp_packet_t *pack, struct l2tp_attr_t *attr,
 	uint16_t attr_type;
 	uint16_t blocks_left;
 	uint16_t last_block_len;
+	size_t md5_digest_length = EVP_MD_get_size(EVP_md5());
 	int err;
+
+	if (evp_ctx == NULL) {
+		log_error("l2tp: can't create EVP context\n");
+		goto err;
+	}
 
 	if (pack->secret == NULL || pack->secret_len == 0) {
 		log_error("l2tp: impossible to hide AVP: no secret\n");
@@ -657,32 +669,32 @@ int encode_attr(const struct l2tp_packet_t *pack, struct l2tp_attr_t *attr,
 	EVP_DigestUpdate(evp_ctx, pack->last_RV->val.octets, pack->last_RV->length);
 	EVP_DigestFinal_ex(evp_ctx, md5, NULL);
 
-	if (attr->length <= EVP_MD_get_size(EVP_md5())) {
+	if (attr->length <= md5_digest_length) {
 		memxor(attr->val.octets, md5, attr->length);
 		EVP_MD_CTX_free(evp_ctx);
 		return 0;
 	}
 
-	memxor(attr->val.octets, md5, EVP_MD_get_size(EVP_md5()));
+	memxor(attr->val.octets, md5, md5_digest_length);
 
-	blocks_left = attr->length / EVP_MD_get_size(EVP_md5()) - 1;
-	last_block_len = attr->length % EVP_MD_get_size(EVP_md5());
+	blocks_left = attr->length / md5_digest_length - 1;
+	last_block_len = attr->length % md5_digest_length;
 
 	for (u8_ptr = attr->val.octets; blocks_left; --blocks_left) {
 		EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
 		EVP_DigestUpdate(evp_ctx, pack->secret, pack->secret_len);
-		EVP_DigestUpdate(evp_ctx, u8_ptr, EVP_MD_get_size(EVP_md5()));
+		EVP_DigestUpdate(evp_ctx, u8_ptr, md5_digest_length);
 		EVP_DigestFinal_ex(evp_ctx, md5, NULL);
-		u8_ptr += EVP_MD_get_size(EVP_md5());
-		memxor(u8_ptr, md5, EVP_MD_get_size(EVP_md5()));
+		u8_ptr += md5_digest_length;
+		memxor(u8_ptr, md5, md5_digest_length);
 	}
 
 	if (last_block_len) {
 		EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
 		EVP_DigestUpdate(evp_ctx, pack->secret, pack->secret_len);
-		EVP_DigestUpdate(evp_ctx, u8_ptr, EVP_MD_get_size(EVP_md5()));
+		EVP_DigestUpdate(evp_ctx, u8_ptr, md5_digest_length);
 		EVP_DigestFinal_ex(evp_ctx, md5, NULL);
-		memxor(u8_ptr + EVP_MD_get_size(EVP_md5()), md5, last_block_len);
+		memxor(u8_ptr + md5_digest_length, md5, last_block_len);
 	}
 
 	EVP_MD_CTX_free(evp_ctx);

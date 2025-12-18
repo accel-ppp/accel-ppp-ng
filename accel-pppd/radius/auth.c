@@ -22,6 +22,11 @@ static int decrypt_chap_mppe_keys(struct rad_req_t *req, struct rad_attr_t *attr
 	uint8_t plain[32];
 	int i;
 
+	if (evp_ctx == NULL) {
+		log_ppp_error("radius: can't create EVP context\n");
+		return -1;
+	}
+
 	if (attr->len != 32) {
 		log_ppp_warn("radius: %s: incorrect attribute length (%i)\n", attr->attr->name, attr->len);
 		return -1;
@@ -76,6 +81,11 @@ static int decrypt_mppe_key(struct rad_req_t *req, struct rad_attr_t *attr, uint
 	}
 
 	evp_ctx = EVP_MD_CTX_new();
+	if (evp_ctx == NULL) {
+		log_ppp_error("radius: can't create EVP context\n");
+		return -1;
+	}
+
 	EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
 	EVP_DigestUpdate(evp_ctx, req->serv->secret, strlen(req->serv->secret));
 	EVP_DigestUpdate(evp_ctx, req->pack->buf + 4, 16);
@@ -132,6 +142,10 @@ static uint8_t* encrypt_password(const char *passwd, const char *secret, const u
 	memcpy(c, RA, 16);
 
 	evp_ctx = EVP_MD_CTX_new();
+	if (evp_ctx == NULL) {
+		log_ppp_error("radius: can't create EVP context\n");
+		return NULL;
+	}
 
 	for (i = 0; i < chunk_cnt; i++) {
 		EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);

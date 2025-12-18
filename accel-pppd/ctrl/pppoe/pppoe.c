@@ -707,15 +707,25 @@ static void print_packet(const char *ifname, const char *op, uint8_t *pack)
 	log_info2("]\n");
 }
 
-static void generate_cookie(struct pppoe_serv_t *serv, const uint8_t *src, uint8_t *cookie, const struct pppoe_tag *host_uniq, const struct pppoe_tag *relay_sid)
+static int generate_cookie(struct pppoe_serv_t *serv, const uint8_t *src, uint8_t *cookie, const struct pppoe_tag *host_uniq, const struct pppoe_tag *relay_sid)
 {
 	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
 	EVP_CIPHER_CTX *des_ctx = EVP_CIPHER_CTX_new();
 	unsigned char key[EVP_MAX_KEY_LENGTH];
-	int i;
+	int i, outl;
 	uint8_t u1[24];
 	uint8_t u2[24];
+	uint8_t padding[EVP_MAX_BLOCK_LENGTH];
 	struct timespec ts;
+
+	if (evp_ctx == NULL || des_ctx == NULL) {
+		log_error("pppoe: can't create EVP contexts for cookie: hash %p cipher %p\n", evp_ctx, des_ctx);
+		if (des_ctx != NULL)
+			EVP_CIPHER_CTX_free(des_ctx);
+		if (evp_ctx != NULL)
+			EVP_MD_CTX_free(evp_ctx);
+		return -1;
+	}
 
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 
@@ -723,6 +733,7 @@ static void generate_cookie(struct pppoe_serv_t *serv, const uint8_t *src, uint8
 	key[6] = src[4];
 	key[7] = src[5];
 	EVP_EncryptInit_ex(des_ctx, EVP_des_ecb(), NULL, key, NULL);
+	EVP_CIPHER_CTX_set_padding(des_ctx, 0);
 
 	EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
 	EVP_DigestUpdate(evp_ctx, serv->secret, SECRET_LENGTH);
@@ -745,14 +756,17 @@ static void generate_cookie(struct pppoe_serv_t *serv, const uint8_t *src, uint8
 
 	*(uint32_t *)(u1 + 20) = ts.tv_sec + conf_cookie_timeout;
 
-	EVP_EncryptUpdate(des_ctx, u2, NULL, u1, 24);
+	EVP_EncryptUpdate(des_ctx, u2, &outl, u1, 24);
+	EVP_EncryptFinal_ex(des_ctx, padding, &outl);
 
-	EVP_EncryptUpdate(serv->des_enc_ctx, u1, NULL, u2, 24);
+	EVP_EncryptUpdate(serv->des_enc_ctx, u1, &outl, u2, 24);
 
 	memcpy(cookie, u1, 24);
 
 	EVP_CIPHER_CTX_free(des_ctx);
 	EVP_MD_CTX_free(evp_ctx);
+
+	return 0;
 }
 
 static int check_cookie(struct pppoe_serv_t *serv, const uint8_t *src, const uint8_t *cookie, const struct pppoe_tag *relay_sid)
@@ -762,7 +776,14 @@ static int check_cookie(struct pppoe_serv_t *serv, const uint8_t *src, const uin
 	unsigned char key[EVP_MAX_KEY_LENGTH];
 	uint8_t u1[24];
 	uint8_t u2[24];
+	uint8_t padding[EVP_MAX_BLOCK_LENGTH];
 	struct timespec ts;
+	int outl;
+
+	if (des_ctx == NULL) {
+		log_error("pppoe: can't create EVP cipher context\n");
+		return -1;
+	}
 
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 
@@ -771,11 +792,13 @@ static int check_cookie(struct pppoe_serv_t *serv, const uint8_t *src, const uin
 	key[7] = src[5];
 
 	EVP_DecryptInit_ex(des_ctx, EVP_des_ecb(), NULL, key, NULL);
+	EVP_CIPHER_CTX_set_padding(des_ctx, 0);
 
 	memcpy(u1, cookie, 24);
 
-	EVP_DecryptUpdate(serv->des_dec_ctx, u2, NULL, u1, 24);
-	EVP_DecryptUpdate(des_ctx, u1, NULL, u2, 24);
+	EVP_DecryptUpdate(serv->des_dec_ctx, u2, &outl, u1, 24);
+	EVP_DecryptUpdate(des_ctx, u1, &outl, u2, 24);
+	EVP_DecryptFinal_ex(des_ctx, padding, &outl);
 
 	EVP_CIPHER_CTX_free(des_ctx);
 
@@ -783,6 +806,10 @@ static int check_cookie(struct pppoe_serv_t *serv, const uint8_t *src, const uin
 		return 1;
 
 	evp_ctx = EVP_MD_CTX_new();
+	if (evp_ctx == NULL) {
+		log_error("pppoe: can't create EVP md context\n");
+		return -1;
+	}
 	EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
 	EVP_DigestUpdate(evp_ctx, serv->secret, SECRET_LENGTH);
 	EVP_DigestUpdate(evp_ctx, serv->hwaddr, ETH_ALEN);
@@ -873,7 +900,10 @@ static void pppoe_send_PADO(struct pppoe_serv_t *serv, const uint8_t *addr, cons
 	if (service_name)
 		add_tag2(pack, sizeof(pack), service_name);
 
-	generate_cookie(serv, addr, cookie, host_uniq, relay_sid);
+	if (generate_cookie(serv, addr, cookie, host_uniq, relay_sid)) {
+		log_error("pppoe: can't generate the cookie\n");
+		return;
+	}
 
 	add_tag(pack, sizeof(pack), TAG_AC_COOKIE, cookie, COOKIE_LENGTH);
 
@@ -1797,10 +1827,21 @@ static int init_secret(struct pppoe_serv_t *serv)
 	RAND_bytes(key, sizeof(key));
 
 	serv->des_enc_ctx = EVP_CIPHER_CTX_new();
+	if (serv->des_enc_ctx == NULL) {
+		log_error("pppoe: can't create EVP cipher context for encryption\n");
+		return -1;
+	}
 	serv->des_dec_ctx = EVP_CIPHER_CTX_new();
+	if (serv->des_dec_ctx == NULL) {
+		EVP_CIPHER_CTX_free(serv->des_enc_ctx);
+		log_error("pppoe: can't create EVP cipher context for decryption\n");
+		return -1;
+	}
 
 	EVP_EncryptInit_ex(serv->des_enc_ctx, EVP_des_ecb(), NULL, key, NULL);
+	EVP_CIPHER_CTX_set_padding(serv->des_enc_ctx, 0);
 	EVP_DecryptInit_ex(serv->des_dec_ctx, EVP_des_ecb(), NULL, key, NULL);
+	EVP_CIPHER_CTX_set_padding(serv->des_dec_ctx, 0);
 
 	return 0;
 }

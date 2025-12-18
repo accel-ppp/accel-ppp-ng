@@ -135,7 +135,10 @@ static struct cs_pd_t *create_pd(struct ap_session *ses, const char *username)
 		unsigned int size = 0;
 		list_for_each_entry(hc, &hash_chain, entry) {
 			md_ctx = EVP_MD_CTX_new();
-			EVP_MD_CTX_init(md_ctx);
+			if (md_ctx == NULL) {
+				log_error("chap-secrets: can't create EVP cipher context\n");
+				return NULL;
+			}
 			EVP_DigestInit_ex(md_ctx, hc->md, NULL);
 			EVP_DigestUpdate(md_ctx, size == 0 ? (void *)username : (void *)hash, size == 0 ? strlen(username) : size);
 			EVP_DigestFinal_ex(md_ctx, hash, &size);
@@ -336,7 +339,7 @@ static char* get_passwd(struct pwdb_t *pwdb, struct ap_session *ses, const char 
 
 static void des_encrypt(const uint8_t *input, const uint8_t *key, uint8_t *output)
 {
-	int i, j, parity;
+	int i, j, parity, outl;
 	union
 	{
 		uint64_t u64;
@@ -344,7 +347,12 @@ static void des_encrypt(const uint8_t *input, const uint8_t *key, uint8_t *outpu
 	} p_key;
 
 	unsigned char cb[EVP_MAX_KEY_LENGTH];
+	unsigned char padding[EVP_MAX_BLOCK_LENGTH];
 	EVP_CIPHER_CTX *evp_ctx = EVP_CIPHER_CTX_new();
+	if (evp_ctx == NULL) {
+		log_error("chap-secrets: can't create EVP cipher context\n");
+		return;
+	}
 
 	memcpy(p_key.buf, key, 7);
 	p_key.u64 = be64toh(p_key.u64);
@@ -358,7 +366,9 @@ static void des_encrypt(const uint8_t *input, const uint8_t *key, uint8_t *outpu
 	}
 
 	EVP_EncryptInit_ex(evp_ctx, EVP_des_ecb(), NULL, cb, NULL);
-	EVP_EncryptUpdate(evp_ctx, output, NULL, input, EVP_CIPHER_block_size(EVP_des_ecb()));
+	EVP_CIPHER_CTX_set_padding(evp_ctx, 0);
+	EVP_EncryptUpdate(evp_ctx, output, &outl, input, EVP_CIPHER_block_size(EVP_des_ecb()));
+	EVP_EncryptFinal_ex(evp_ctx, padding, &outl);
 	EVP_CIPHER_CTX_free(evp_ctx);
 }
 
@@ -369,6 +379,11 @@ static int auth_pap(struct cs_pd_t *pd, const char *username, va_list args)
 	unsigned char z_hash[21];
 	char *u_passwd;
 	int i, len = strlen(passwd);
+
+	if (evp_ctx == NULL) {
+		log_error("chap-secrets: can't create EVP context\n");
+		return PWDB_DENIED;
+	}
 
 	u_passwd = _malloc(len * 2);
 	for (i = 0; i< len; i++) {
@@ -418,6 +433,11 @@ static void derive_mppe_keys_mschap_v1(struct ap_session *ses, const uint8_t *z_
 		.recv_key = digest,
 		.send_key = digest,
 	};
+
+	if (evp_ctx == NULL) {
+		log_error("chap-secrets: can't create EVP context\n");
+		return;
+	}
 
 	//NtPasswordHashHash
 	EVP_DigestInit_ex(evp_ctx, EVP_md4(), NULL);
@@ -484,6 +504,10 @@ static void generate_mschap_response(const uint8_t *nt_response, const uint8_t *
           0x65, 0x20, 0x69, 0x74, 0x65, 0x72, 0x61, 0x74, 0x69, 0x6F,
           0x6E};
 
+	if (evp_ctx == NULL) {
+		log_error("chap-secrets: can't create EVP context\n");
+		return;
+	}
 
 	EVP_DigestInit_ex(evp_ctx, EVP_md4(), NULL);
 	EVP_DigestUpdate(evp_ctx, z_hash, 16);
@@ -563,6 +587,11 @@ static void derive_mppe_keys_mschap_v2(struct ap_session *ses, const uint8_t *z_
 		.send_key = send_key,
 	};
 
+	if (evp_ctx == NULL) {
+		log_error("chap-secrets: can't create EVP context\n");
+		return;
+	}
+
 	//NtPasswordHashHash
 	EVP_DigestInit_ex(evp_ctx, EVP_md4(), NULL);
 	EVP_DigestUpdate(evp_ctx, z_hash, 16);
@@ -611,6 +640,11 @@ int auth_mschap_v2(struct ap_session *ses, struct cs_pd_t *pd, const char *usern
 	uint8_t nt_hash[24];
 	uint8_t c_hash[EVP_MAX_MD_SIZE];
 	EVP_MD_CTX *sha_ctx = EVP_MD_CTX_new();
+
+	if (sha_ctx == NULL) {
+		log_error("chap-secrets: can't create EVP context\n");
+		return -1;
+	}
 
 	EVP_DigestInit_ex(sha_ctx, EVP_sha1(), NULL);
 	EVP_DigestUpdate(sha_ctx, peer_challenge, 16);
@@ -714,7 +748,7 @@ static void parse_hash_chain(const char *opt)
 		f = *ptr2 == 0;
 		*ptr2 = 0;
 		hc = _malloc(sizeof(*hc));
-		hc->md = EVP_get_digestbyname(ptr1);
+		hc->md = EVP_MD_fetch(NULL, ptr1, NULL);
 		if (!hc->md) {
 			log_error("chap-secrets: digest '%s' is unavailable\n", ptr1);
 			_free(hc);

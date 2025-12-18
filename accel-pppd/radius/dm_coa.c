@@ -36,6 +36,9 @@ static int dm_coa_check_RA(struct rad_packet_t *pack, const char *secret)
 	uint8_t RA[16];
 	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
 
+	if (evp_ctx == NULL)
+		return -1;
+
 	memset(RA, 0, 16);
 
 	EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
@@ -50,9 +53,12 @@ static int dm_coa_check_RA(struct rad_packet_t *pack, const char *secret)
 	return memcmp(RA, pack->buf + 4, 16);
 }
 
-static void dm_coa_set_RA(struct rad_packet_t *pack, const char *secret)
+static int dm_coa_set_RA(struct rad_packet_t *pack, const char *secret)
 {
 	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
+
+	if (evp_ctx == NULL)
+		return -1;
 
 	EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
 	EVP_DigestUpdate(evp_ctx, pack->buf, pack->len);
@@ -60,6 +66,8 @@ static void dm_coa_set_RA(struct rad_packet_t *pack, const char *secret)
 	EVP_DigestFinal_ex(evp_ctx, pack->buf + 4, NULL);
 
 	EVP_MD_CTX_free(evp_ctx);
+
+	return 0;
 }
 
 static int dm_coa_send_ack(int fd, struct rad_packet_t *req, struct sockaddr_in *addr)
@@ -80,7 +88,10 @@ static int dm_coa_send_ack(int fd, struct rad_packet_t *req, struct sockaddr_in 
 		return -1;
 	}
 
-	dm_coa_set_RA(reply, conf_dm_coa_secret);
+	if (dm_coa_set_RA(reply, conf_dm_coa_secret)) {
+		rad_packet_free(reply);
+		return -1;
+	}
 
 	if (conf_verbose) {
 		log_ppp_info2("send ");
@@ -115,7 +126,10 @@ static int dm_coa_send_nak(int fd, struct rad_packet_t *req, struct sockaddr_in 
 		return -1;
 	}
 
-	dm_coa_set_RA(reply, conf_dm_coa_secret);
+	if (dm_coa_set_RA(reply, conf_dm_coa_secret)) {
+		rad_packet_free(reply);
+		return -1;
+	}
 
 	if (conf_verbose) {
 		log_ppp_info2("send ");

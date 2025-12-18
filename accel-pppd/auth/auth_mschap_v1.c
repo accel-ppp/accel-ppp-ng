@@ -396,14 +396,20 @@ static void chap_recv_response(struct chap_auth_data *ad, struct chap_hdr *hdr)
 
 static void des_encrypt(const uint8_t *input, const uint8_t *key, uint8_t *output)
 {
-	int i, j, parity;
+	int i, j, parity, outl;
 	union
 	{
 		uint64_t u64;
 		uint8_t buf[8];
 	} p_key;
 	unsigned char cb[EVP_MAX_KEY_LENGTH];
+	unsigned char padding[EVP_MAX_BLOCK_LENGTH];
 	EVP_CIPHER_CTX *des_ctx = EVP_CIPHER_CTX_new();
+	if (des_ctx == NULL) {
+		if (conf_ppp_verbose)
+			log_ppp_error("mschap-v1: can't create EVP cipher context\n");
+		return;
+	}
 
 	memcpy(p_key.buf, key, 7);
 	p_key.u64 = be64toh(p_key.u64);
@@ -417,7 +423,9 @@ static void des_encrypt(const uint8_t *input, const uint8_t *key, uint8_t *outpu
 	}
 
 	EVP_EncryptInit_ex(des_ctx, EVP_des_ecb(), NULL, cb, NULL);
-	EVP_EncryptUpdate(des_ctx, output, NULL, input, EVP_CIPHER_block_size(EVP_des_ecb()));
+	EVP_CIPHER_CTX_set_padding(des_ctx, 0);
+	EVP_EncryptUpdate(des_ctx, output, &outl, input, EVP_CIPHER_block_size(EVP_des_ecb()));
+	EVP_EncryptFinal_ex(des_ctx, padding, &outl);
 
 	EVP_CIPHER_CTX_free(des_ctx);
 }
@@ -430,6 +438,12 @@ static int chap_check_response(struct chap_auth_data *ad, struct chap_response *
 	char *passwd;
 	char *u_passwd;
 	int i;
+
+	if (evp_ctx == NULL) {
+		if (conf_ppp_verbose)
+			log_ppp_error("mschap-v1: can't create EVP md context\n");
+		return PWDB_DENIED;
+	}
 
 	passwd = pwdb_get_passwd(&ad->ppp->ses, name);
 	if (!passwd) {
@@ -479,6 +493,12 @@ static void set_mppe_keys(struct chap_auth_data *ad, uint8_t *z_hash)
 		.recv_key = digest,
 		.send_key = digest,
 	};
+
+	if (evp_ctx == NULL) {
+		if (conf_ppp_verbose)
+			log_ppp_error("mschap-v1: can't create EVP md context\n");
+		return;
+	}
 
 	//NtPasswordHashHash
 	EVP_DigestInit_ex(evp_ctx, EVP_md4(), NULL);

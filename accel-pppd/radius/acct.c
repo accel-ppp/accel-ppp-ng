@@ -29,6 +29,9 @@ static int req_set_RA(struct rad_req_t *req, const char *secret)
 {
 	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
 
+	if (evp_ctx == NULL)
+		return -1;
+
 	if (rad_packet_build(req->pack, req->RA))
 		return -1;
 

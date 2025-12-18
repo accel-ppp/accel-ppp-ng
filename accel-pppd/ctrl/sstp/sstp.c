@@ -2597,7 +2597,11 @@ static void ssl_load_config(struct sstp_serv_t *serv, const char *servername)
 				goto error;
 			}
 
-			SSL_CTX_set0_tmp_dh_pkey(ssl_ctx, dh);
+			if (SSL_CTX_set0_tmp_dh_pkey(ssl_ctx, dh) != 1) {
+				log_error("sstp: %s error: %s\n", "ssl-dhparam", ERR_error_string(ERR_get_error(), NULL));
+				EVP_PKEY_free(dh);
+				goto error;
+			}
 #endif
 		}
 

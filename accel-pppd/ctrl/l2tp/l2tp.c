@@ -229,6 +229,9 @@ static inline void comp_chap_md5(uint8_t *md5, uint8_t ident,
 				 const void *chall, size_t chall_len)
 {
 	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
+	if (evp_ctx == NULL) {
+		return;
+	}
 
 	memset(md5, 0, EVP_MD_get_size(EVP_md5()));
 
@@ -447,6 +450,7 @@ static int l2tp_tunnel_checkchallresp(uint8_t msgident,
 				      const struct l2tp_attr_t *challresp)
 {
 	uint8_t challref[EVP_MAX_MD_SIZE];
+	size_t md5_digest_length = EVP_MD_get_size(EVP_md5());
 
 	if (conn->secret == NULL || conn->secret_len == 0) {
 		if (challresp) {
@@ -467,7 +471,7 @@ static int l2tp_tunnel_checkchallresp(uint8_t msgident,
 		log_tunnel(log_error, conn, "impossible to authenticate peer:"
 			   " no Challenge Response sent by peer\n");
 		return -1;
-	} else if (challresp->length != EVP_MD_get_size(EVP_md5())) {
+	} else if (challresp->length != md5_digest_length) {
 		log_tunnel(log_error, conn, "impossible to authenticate peer:"
 			   " invalid Challenge Response sent by peer"
 			   " (inconsistent length: %i bytes)\n",
@@ -477,7 +481,7 @@ static int l2tp_tunnel_checkchallresp(uint8_t msgident,
 
 	comp_chap_md5(challref, msgident, conn->secret, conn->secret_len,
 		      conn->challenge, conn->challenge_len);
-	if (memcmp(challref, challresp->val.octets, EVP_MD_get_size(EVP_md5())) != 0) {
+	if (memcmp(challref, challresp->val.octets, md5_digest_length) != 0) {
 		log_tunnel(log_error, conn, "impossible to authenticate peer:"
 			   " invalid Challenge Response sent by peer"
 			   " (wrong secret)\n");

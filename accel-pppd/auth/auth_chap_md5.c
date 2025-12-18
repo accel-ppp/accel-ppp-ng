@@ -365,6 +365,14 @@ static void chap_recv_response(struct chap_auth_data *ad, struct chap_hdr *hdr)
 		}
 
 		evp_ctx = EVP_MD_CTX_new();
+		if (evp_ctx == NULL) {
+			_free(name);
+			_free(passwd);
+			if (conf_ppp_verbose)
+				log_ppp_error("chap-md5: can't create EVP context\n");
+			chap_send_failure(ad);
+			return;
+		}
 		EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
 		EVP_DigestUpdate(evp_ctx, &msg->hdr.id, 1);
 		EVP_DigestUpdate(evp_ctx, passwd, strlen(passwd));
