@@ -42,7 +42,7 @@ static vapi_error_e vpppoe_s_session_add_reply_callback(struct vapi_ctx_s *ctx,
 	return rv;
 }
 
-__export int vpppoe_sync_add_pppoe_interface(uint8_t *client_mac, uint16_t session_id, uint32_t *sw_ifindex)
+int vpppoe_sync_add_pppoe_interface(uint8_t *client_mac, uint16_t session_id, uint32_t *sw_ifindex)
 {
 	vapi_error_e err = -1;
 	struct vapi_ctx_s *ctx;
@@ -83,7 +83,7 @@ static vapi_error_e vpppoe_s_session_del_reply_callback(struct vapi_ctx_s *ctx,
 	return rv;
 }
 
-__export int vpppoe_sync_del_pppoe_interface(uint8_t *client_mac, uint16_t session_id)
+int vpppoe_sync_del_pppoe_interface(uint8_t *client_mac, uint16_t session_id)
 {
 	vapi_error_e err = -1;
 	struct vapi_ctx_s *ctx;
@@ -124,7 +124,7 @@ static vapi_error_e vpppoe_set_feature_callback(struct vapi_ctx_s *ctx,
 	return rv;
 }
 
-__export int vpppoe_set_feature(uint32_t ifindex, int is_enabled, const char *feature, const char *arc)
+int vpppoe_set_feature(uint32_t ifindex, int is_enabled, const char *feature, const char *arc)
 {
 	vapi_error_e err = -1;
 	struct vapi_ctx_s *ctx;
@@ -178,7 +178,7 @@ static vapi_error_e vpppoe_dump_interface_name_callback(struct vapi_ctx_s *ctx,
 	return rv;
 }
 
-__export int vpppoe_dump_interface_name(uint32_t ifindex, char *name, size_t size)
+int vpppoe_dump_interface_name(uint32_t ifindex, char *name, size_t size)
 {
 	vapi_error_e err = -1;
 	struct vapi_ctx_s *ctx;

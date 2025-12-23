@@ -27,9 +27,9 @@
 
 #include "memdebug.h"
 
-#ifdef HAVE_VPP
-# include "vppipv6layer.h"
-#endif /* HAVE_VPP */
+#ifdef HAVE_SESSION_HOOKS
+# include "ppp_ipv6layer.h"
+#endif /* HAVE_SESSION_HOOKS */
 #include "accel_iputils.h"
 
 #define BUF_SIZE 65536
@@ -68,9 +68,9 @@ static void *pd_key;
 
 static int dhcpv6_read(struct triton_md_handler_t *h);
 
-#ifdef HAVE_VPP
+#ifdef HAVE_SESSION_HOOKS
 int dhcpv6_external_process_udp(struct ap_session *ses, const void *buf, size_t n, struct in6_addr *addr, unsigned short port);
-#endif /* HAVE_VPP */
+#endif /* HAVE_SESSION_HOOKS */
 
 static void ev_ses_started(struct ap_session *ses)
 {
@@ -88,11 +88,11 @@ static void ev_ses_started(struct ap_session *ses)
 	if (a->prefix_len == 0 || IN6_IS_ADDR_UNSPECIFIED(&a->addr))
 		return;
 
-#ifdef HAVE_VPP
-	if (ses->non_dev_ppp_fixup != NULL) {
+#ifdef HAVE_SESSION_HOOKS
+	if (ses->hooks && ses->hooks->is_non_socket_dhcpv6_nd) {
 		ipv6layer_unit_enable_dhcpv6(ses, dhcpv6_external_process_udp);
 	} else
-#endif /* HAVE_VPP */
+#endif /* HAVE_SESSION_HOOKS */
 	{
 		net->enter_ns();
 		sock = net->socket(AF_INET6, SOCK_DGRAM, 0);
@@ -144,7 +144,10 @@ static void ev_ses_started(struct ap_session *ses)
 
 	pd->ses = ses;
 
-	if (ses->non_dev_ppp_fixup == NULL) {
+#ifdef HAVE_SESSION_HOOKS
+	if (!(ses->hooks && ses->hooks->is_non_socket_dhcpv6_nd))
+#endif /* HAVE_SESSION_HOOKS */
+	{
 		pd->hnd.fd = sock;
 		pd->hnd.read = dhcpv6_read;
 		triton_md_register_handler(ses->ctrl->ctx, &pd->hnd);
@@ -186,11 +189,11 @@ static void ev_ses_finished(struct ap_session *ses)
 		ipdb_put_ipv6_prefix(ses, ses->ipv6_dp);
 	}
 
-#ifdef HAVE_VPP
-	if (ses->non_dev_ppp_fixup != NULL) {
+#ifdef HAVE_SESSION_HOOKS
+	if (ses->hooks && ses->hooks->is_non_socket_dhcpv6_nd) {
 		ipv6layer_unit_disable_dhcpv6(ses);
 	} else
-#endif /* HAVE_VPP */
+#endif /* HAVE_SESSION_HOOKS */
 	{
 		triton_md_unregister_handler(&pd->hnd, 1);
 	}
@@ -512,11 +515,11 @@ static void dhcpv6_send_reply(struct dhcpv6_packet *req, struct dhcpv6_pd *pd, i
 
 	dhcpv6_fill_relay_info(reply);
 
-#ifdef HAVE_VPP
-	if (ses->non_dev_ppp_fixup != NULL) {
+#ifdef HAVE_SESSION_HOOKS
+	if (ses->hooks && ses->hooks->is_non_socket_dhcpv6_nd) {
 		ipv6layer_unit_dhcpv6_send(ses, reply->hdr, reply->endptr - (void *)reply->hdr, (struct sockaddr *)&req->addr, sizeof(req->addr));
 	} else
-#endif /* HAVE_VPP */
+#endif /* HAVE_SESSION_HOOKS */
 	{
 		req->addr.sin6_scope_id = ses->ifindex;
 		net->sendto(pd->hnd.fd, reply->hdr, reply->endptr - (void *)reply->hdr, 0, (struct sockaddr *)&req->addr, sizeof(req->addr));
@@ -675,11 +678,11 @@ static void dhcpv6_send_reply2(struct dhcpv6_packet *req, struct dhcpv6_pd *pd, 
 
 	dhcpv6_fill_relay_info(reply);
 
-#ifdef HAVE_VPP
-	if (ses->non_dev_ppp_fixup != NULL) {
+#ifdef HAVE_SESSION_HOOKS
+	if (ses->hooks && ses->hooks->is_non_socket_dhcpv6_nd) {
 		ipv6layer_unit_dhcpv6_send(ses, reply->hdr, reply->endptr - (void *)reply->hdr, (struct sockaddr *)&req->addr, sizeof(req->addr));
 	} else
-#endif /* HAVE_VPP */
+#endif /* HAVE_SESSION_HOOKS */
 	{
 		req->addr.sin6_scope_id = ses->ifindex;
 		net->sendto(pd->hnd.fd, reply->hdr, reply->endptr - (void *)reply->hdr, 0, (struct sockaddr *)&req->addr, sizeof(req->addr));
@@ -916,7 +919,7 @@ int dhcpv6_read_process_udp(struct ap_session *ses, struct dhcpv6_pd *pd, const 
 	return 0;
 }
 
-#ifdef HAVE_VPP
+#ifdef HAVE_SESSION_HOOKS
 int dhcpv6_external_process_udp(struct ap_session *ses, const void *buf, size_t n, struct in6_addr *addr, unsigned short port)
 {
 	struct dhcpv6_pd *pd = find_pd(ses); /* TODO: add check */
@@ -927,7 +930,7 @@ int dhcpv6_external_process_udp(struct ap_session *ses, const void *buf, size_t 
 
 	return dhcpv6_read_process_udp(ses, pd, (const uint8_t *)buf, n, &saddr);
 }
-#endif /* HAVE_VPP */
+#endif /* HAVE_SESSION_HOOKS */
 
 static int dhcpv6_read(struct triton_md_handler_t *h)
 {

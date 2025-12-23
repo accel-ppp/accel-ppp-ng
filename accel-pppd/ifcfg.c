@@ -98,9 +98,11 @@ void __export ap_session_accounting_started(struct ap_session *ses)
 	if (ses->stop_time)
 		return;
 
+#ifdef HAVE_SESSION_HOOKS
 	/* Skip completely ifcfg routine for non-dev-ppp sessions */
-	if (ses->non_dev_ppp_fixup != NULL)
+	if (ses->hooks && ses->hooks->pppoe_create_session_interface)
 		goto skip_ifcfg;
+#endif /* HAVE_SESSION_HOOKS */
 
 	memset(&ifr, 0, sizeof(ifr));
 	strcpy(ifr.ifr_name, ses->ifname);
@@ -193,7 +195,9 @@ void __export ap_session_accounting_started(struct ap_session *ses)
 #endif
 	}
 
+#ifdef HAVE_SESSION_HOOKS
 skip_ifcfg:
+#endif /* HAVE_SESSION_HOOKS */
 
 	ses->ctrl->started(ses);
 

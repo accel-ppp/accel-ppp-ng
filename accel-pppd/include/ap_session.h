@@ -5,6 +5,7 @@
 
 #include "triton.h"
 #include "ap_net.h"
+#include "ap_session_hooks.h"
 
 //#define AP_SESSIONID_LEN 16
 #define AP_IFNAME_LEN 64
@@ -124,16 +125,12 @@ struct ap_session
 	uint64_t acct_tx_bytes_i;
 	int acct_start;
 
-	int (*non_dev_ppp_fixup)(struct ap_session*);
-	uint32_t vpp_sw_if_index;
-	struct list_head vpp_routes;
-	int (*vpp_nd_recv)(struct ap_session *, const void *, size_t, struct in6_addr *);
-	int (*vpp_dhcpv6_recv)(struct ap_session *, const void *, size_t, struct in6_addr *, unsigned short);
+	int (*ppp_ipv6_nd_recv)(struct ap_session *, const void *, size_t, struct in6_addr *);
+	int (*ppp_ipv6_dhcpv6_recv)(struct ap_session *, const void *, size_t, struct in6_addr *, unsigned short);
 
-	uint32_t vpppolicer_down;
-	uint64_t vpppolicer_down_burst;
-	uint32_t vpppolicer_up;
-	uint64_t vpppolicer_up_burst;
+#ifdef HAVE_SESSION_HOOKS
+	struct ap_session_hooks_t *hooks;
+#endif /* HAVE_SESSION_HOOKS */
 };
 
 struct ap_session_stat

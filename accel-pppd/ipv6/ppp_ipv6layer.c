@@ -39,39 +39,39 @@ void ipv6layer_del_unit_layer(struct ap_session *ses)
 
 __export void ipv6layer_unit_enable_nd(struct ap_session *ses, int (*nd_recv)(struct ap_session *, const void *, size_t, struct in6_addr *))
 {
-	ses->vpp_nd_recv = nd_recv;
+	ses->ppp_ipv6_nd_recv = nd_recv;
 
-	/* If there is no vpp_dhcpv6_recv - then the layer is not installed and needs to be installed */
-	if (ses->vpp_dhcpv6_recv == NULL)
+	/* If there is no ppp_ipv6_dhcpv6_recv - then the layer is not installed and needs to be installed */
+	if (ses->ppp_ipv6_dhcpv6_recv == NULL)
 		ipv6layer_add_unit_layer(ses);
 }
 
 __export void ipv6layer_unit_disable_nd(struct ap_session *ses)
 {
-	ses->vpp_nd_recv = NULL;
+	ses->ppp_ipv6_nd_recv = NULL;
 
-	if (ses->vpp_dhcpv6_recv == NULL)
+	if (ses->ppp_ipv6_dhcpv6_recv == NULL)
 		ipv6layer_del_unit_layer(ses);
 }
 
 __export void ipv6layer_unit_enable_dhcpv6(struct ap_session *ses, int (*dhcpv6_recv)(struct ap_session *, const void *, size_t, struct in6_addr *, unsigned short))
 {
-	ses->vpp_dhcpv6_recv = dhcpv6_recv;
+	ses->ppp_ipv6_dhcpv6_recv = dhcpv6_recv;
 
-	/* If there is no vpp_nd_recv - then the layer is not installed and needs to be installed */
-	if (ses->vpp_nd_recv == NULL)
+	/* If there is no ppp_ipv6_nd_recv - then the layer is not installed and needs to be installed */
+	if (ses->ppp_ipv6_nd_recv == NULL)
 		ipv6layer_add_unit_layer(ses);
 }
 
 __export void ipv6layer_unit_disable_dhcpv6(struct ap_session *ses)
 {
-	ses->vpp_dhcpv6_recv = NULL;
+	ses->ppp_ipv6_dhcpv6_recv = NULL;
 
-	if (ses->vpp_nd_recv == NULL)
+	if (ses->ppp_ipv6_nd_recv == NULL)
 		ipv6layer_del_unit_layer(ses);
 }
 
-static inline uint32_t partial_csum(uint32_t sum, uint16_t *buf, int len)
+static inline uint32_t partial_csum(uint32_t sum, const uint16_t *buf, int len)
 {
 	for (; len > 1;) {
 		sum += *buf++;
@@ -79,7 +79,7 @@ static inline uint32_t partial_csum(uint32_t sum, uint16_t *buf, int len)
 	}
 
 	if (len == 1) {
-		sum += *((uint8_t *)buf);
+		sum += *((const uint8_t *)buf);
 	}
 
 	return sum;
@@ -112,8 +112,8 @@ static inline uint16_t ipv6_calc_csum(uint8_t proto, const void *buf, uint32_t l
 	pseudo_hdr.plen = htonl(len);
 	pseudo_hdr.next_header = proto;
 
-	sum = partial_csum(sum, (uint16_t *)&pseudo_hdr, sizeof(pseudo_hdr));
-	sum = partial_csum(sum, (uint16_t *)buf, len);
+	sum = partial_csum(sum, (const uint16_t *)&pseudo_hdr, sizeof(pseudo_hdr));
+	sum = partial_csum(sum, (const uint16_t *)buf, len);
 
 	return finish_csum(sum);
 }
@@ -199,19 +199,19 @@ void ppp_unit_ipv6_recv(struct ppp_handler_t *ppp_h)
 	struct ppp_t *ppp = container_of(ppp_h, typeof(*ppp), vpp_ipv6_hnd);
 
 	ip6 = (struct ip6_hdr *)((unsigned char *)(ppp->buf) + 2);
-	if (ip6->ip6_nxt == IPPROTO_ICMPV6 && ppp->ses.vpp_nd_recv != NULL) {
+	if (ip6->ip6_nxt == IPPROTO_ICMPV6 && ppp->ses.ppp_ipv6_nd_recv != NULL) {
 		struct icmp6_hdr *icmp6 = (struct icmp6_hdr *)(ip6 + 1);
 
 		if (icmp6->icmp6_type == ND_ROUTER_SOLICIT) {
 			/* nd routine */
-			ppp->ses.vpp_nd_recv(&ppp->ses, icmp6, ppp->buf_size - sizeof(*ip6) - 2, &ip6->ip6_src);
+			ppp->ses.ppp_ipv6_nd_recv(&ppp->ses, icmp6, ppp->buf_size - sizeof(*ip6) - 2, &ip6->ip6_src);
 		}
 	}
-	else if (ip6->ip6_nxt == IPPROTO_UDP && ppp->ses.vpp_dhcpv6_recv != NULL) {
+	else if (ip6->ip6_nxt == IPPROTO_UDP && ppp->ses.ppp_ipv6_dhcpv6_recv != NULL) {
 		struct udphdr *udp = (struct udphdr *)(ip6 + 1);
 		if (udp->source == htons(sc_dhcpv6_client_port) && udp->dest == htons(sc_dhcpv6_serv_port)) {
 			/* dhcpd6 routine */
-			ppp->ses.vpp_dhcpv6_recv(&ppp->ses, udp + 1, ppp->buf_size - sizeof(*udp) - sizeof(*ip6) - 2, &ip6->ip6_src, udp->source);
+			ppp->ses.ppp_ipv6_dhcpv6_recv(&ppp->ses, udp + 1, ppp->buf_size - sizeof(*udp) - sizeof(*ip6) - 2, &ip6->ip6_src, udp->source);
 		}
 	}
 }

@@ -36,10 +36,6 @@
 
 #include "ipdb.h"
 
-#include "vpputils.h"
-#include "vpppoe.h"
-#include "vppiputils.h"
-#include "vpppolicer.h"
 #include "new_link_event.h"
 
 #define SID_MAX 65536
@@ -148,7 +144,6 @@ LIST_HEAD(monitored_link_list);
 static void monitored_link_list_add(const char *name, const char *opt);
 static void monitored_link_list_del(const char *name);
 struct monitored_link_list_entry_t * monitored_link_list_find(const char *name);
-static void pppoe_on_vpp_connection_lost(struct vpp_handler_t *h);
 
 static uint8_t bc_addr[ETH_ALEN] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
@@ -238,23 +233,19 @@ static void ppp_started(struct ap_session *ses)
 	log_ppp_debug("pppoe: ppp started\n");
 }
 
-#ifdef HAVE_VPP
 int pppoe_terminate(struct ap_session *ses, int hard) {
 	int ret = 0;
-	struct ppp_t *ppp = container_of(ses, typeof(*ppp), ses);
-	struct pppoe_conn_t *conn = container_of(ppp, typeof(*conn), ppp);
 
-	if (ppp->is_vpppoe && !conn->serv->is_vpppoe_lost) {
-		vpp_iproute_flush(ses);
-		vpppolicer_remove_limiter(ses);
-		vpppoe_sync_del_pppoe_interface(conn->addr, conn->sid);
-	}
+#ifdef HAVE_SESSION_HOOKS
+	if (ses->hooks && ses->hooks->pppoe_terminate &&
+		ses->hooks->pppoe_terminate(ses, hard))
+		log_ppp_warn("pppoe: issue to terminate PPPoE session with hook\n");
+#endif /* HAVE_SESSION_HOOKS */
 
 	ret = ppp_terminate(ses, hard);
 
 	return ret;
 }
-#endif /* HAVE_VPP */
 
 static void ppp_finished(struct ap_session *ses)
 {
@@ -269,34 +260,6 @@ static void ppp_finished(struct ap_session *ses)
 		triton_context_call(&conn->ctx, (triton_event_func)disconnect, conn);
 	}
 }
-
-#ifdef HAVE_VPP
-int pppoe_create_vpp_session_interface(struct ap_session *ses) {
-	struct ppp_t *ppp = container_of(ses, typeof(*ppp), ses);
-	struct pppoe_conn_t *conn = container_of(ppp, typeof(*conn), ppp);
-	uint32_t ifindex = -1;
-	int ret = 0;
-
-	if (conn->serv->is_vpppoe_lost)
-		return -1;
-
-	ret = vpppoe_sync_add_pppoe_interface(conn->addr, conn->sid, &ifindex);
-	if (ret) {
-		return ret;
-	}
-
-	ses->vpp_sw_if_index = ifindex;
-	vpppoe_dump_interface_name(ifindex, ses->ifname, AP_IFNAME_LEN);
-
-	vpppoe_set_feature(ifindex, 0, "ip4-not-enabled", "ip4-unicast");
-	vpppoe_set_feature(ifindex, 0, "ip6-not-enabled", "ip6-unicast");
-	if (ppp->ses.ipv4) {
-		vpp_iproute_add_del(ses, 1, ifindex, 0, ses->ipv4->peer_addr, 0, ETH_P_ALL, 32, 0);
-	}
-
-	return 0;
-}
-#endif /* HAVE_VPP */
 
 static void pppoe_conn_close(struct triton_context_t *ctx)
 {
@@ -408,11 +371,7 @@ static struct pppoe_conn_t *allocate_channel(struct pppoe_serv_t *serv, const ui
 	conn->ctrl.ctx = &conn->ctx;
 	conn->ctrl.started = ppp_started;
 	conn->ctrl.finished = ppp_finished;
-#ifdef HAVE_VPP
 	conn->ctrl.terminate = pppoe_terminate;
-#else
-	conn->ctrl.terminate = ppp_terminate;
-#endif /* HAVE_VPP */
 	conn->ctrl.max_mtu = min(ETH_DATA_LEN, serv->mtu) - 8;
 	conn->ctrl.type = CTRL_TYPE_PPPOE;
 	conn->ctrl.ppp = 1;
@@ -479,12 +438,29 @@ static struct pppoe_conn_t *allocate_channel(struct pppoe_serv_t *serv, const ui
 
 	ppp_init(&conn->ppp);
 
-#ifdef HAVE_VPP
+#ifdef HAVE_SESSION_HOOKS
 	if (serv->is_vpppoe) {
-		conn->ppp.is_vpppoe = 1;
-		conn->ppp.ses.non_dev_ppp_fixup = pppoe_create_vpp_session_interface;
+		conn->ppp.ses.hooks = serv->ses_hooks;
+		if (conn->ppp.ses.hooks->session_hook_init &&
+			conn->ppp.ses.hooks->session_hook_init(&conn->ppp.ses)) {
+			log_ppp_error("pppoe: issue to initialize hook for session.\n");
+
+			_free(conn->ctrl.service_name);
+			_free(conn->ctrl.calling_station_id);
+			_free(conn->ctrl.called_station_id);
+			_free(conn->service_name);
+			if (conn->host_uniq)
+				_free(conn->host_uniq);
+			if (conn->relay_sid)
+				_free(conn->relay_sid);
+			if (conn->tr101)
+				_free(conn->tr101);
+
+			mempool_free(conn);
+			return NULL;
+		}
 	}
-#endif /* HAVE_VPP */
+#endif /* HAVE_SESSION_HOOKS */
 
 	conn->ppp.ses.net = serv->net;
 	conn->ppp.ses.ctrl = &conn->ctrl;
@@ -1570,7 +1546,7 @@ static void __pppoe_server_start(const char *ifname, const char *opt, void *cli,
 		return;
 	}
 
-#ifndef HAVE_VPP
+#ifndef HAVE_SESSION_HOOKS
 	if (is_vpppoe) {
 		if (cli)
 			cli_sendv(cli, "No support for vpp, option vpp-cp invalid for interface %s\r\n", ifname);
@@ -1579,7 +1555,7 @@ static void __pppoe_server_start(const char *ifname, const char *opt, void *cli,
 
 		return;
 	}
-#endif /* HAVE_VPP */
+#endif /* HAVE_SESSION_HOOKS */
 
 	pthread_rwlock_rdlock(&serv_lock);
 	list_for_each_entry(serv, &serv_list, entry) {
@@ -1612,15 +1588,31 @@ static void __pppoe_server_start(const char *ifname, const char *opt, void *cli,
 	strncpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
 
 	serv->stop_cause = TERM_ADMIN_RESET;
-#ifdef HAVE_VPP
+
+#ifdef HAVE_SESSION_HOOKS
 	serv->is_vpppoe = is_vpppoe;
-	serv->is_vpppoe_lost = 0;
 	if (serv->is_vpppoe) {
-		serv->vpp_handler.on_vpp_connection_lost = pppoe_on_vpp_connection_lost;
-		vpp_register_handler(&serv->vpp_handler);
-		vpp_get();
+		struct ap_session_hooks_t *ses_hooks = NULL;
+		ses_hooks = ap_session_hooks_find("vpp");
+		if (ses_hooks == NULL) {
+			if (cli)
+				cli_sendv(cli, "No \"vpp\" session hooks are present, load the VPP plugin\r\n");
+			log_error("No \"vpp\" session hooks are present, load the VPP plugin\n");
+			_free(serv);
+			return;
+		}
+
+		serv->ses_hooks = ses_hooks;
+
+		if (serv->ses_hooks->get != NULL && serv->ses_hooks->get()) {
+			if (cli)
+				cli_sendv(cli, "Can't get VPP plugin\r\n");
+			log_error("Can't get VPP plugin\n");
+			_free(serv);
+			return;
+		}
 	}
-#endif /* HAVE_VPP */
+#endif /* HAVE_SESSION_HOOKS */
 
 	if (net->sock_ioctl(SIOCGIFFLAGS, &ifr)) {
 		if (cli)
@@ -1714,12 +1706,10 @@ static void __pppoe_server_start(const char *ifname, const char *opt, void *cli,
 
 out_err:
 
-#ifdef HAVE_VPP
-	if (serv->is_vpppoe) {
-		vpp_unregister_handler(&serv->vpp_handler);
-		vpp_put();
-	}
-#endif /* HAVE_VPP */
+#ifdef HAVE_SESSION_HOOKS
+	if (serv->ses_hooks != NULL && serv->ses_hooks->put != NULL)
+		serv->ses_hooks->put();
+#endif /* HAVE_SESSION_HOOKS */
 
 	_free(serv);
 }
@@ -1774,12 +1764,10 @@ void pppoe_server_free(struct pppoe_serv_t *serv)
 
 	triton_context_unregister(&serv->ctx);
 
-#ifdef HAVE_VPP
-	if (serv->is_vpppoe) {
-		vpp_unregister_handler(&serv->vpp_handler);
-		vpp_put();
-	}
-#endif /* HAVE_VPP */
+#ifdef HAVE_SESSION_HOOKS
+	if (serv->ses_hooks != NULL && serv->ses_hooks->put != NULL)
+		serv->ses_hooks->put();
+#endif /* HAVE_SESSION_HOOKS */
 
 	if (serv->des_enc_ctx)
 		EVP_CIPHER_CTX_free(serv->des_enc_ctx);
@@ -1813,6 +1801,16 @@ void __export pppoe_get_stat(unsigned int **starting, unsigned int **active)
 {
 	*starting = &stat_starting;
 	*active = &stat_active;
+}
+
+void __export pppoe_get_session_mac_and_sid(struct ap_session *ses, uint8_t **mac, uint16_t *sid)
+{
+	/* AND_TODO: add check if ses is pppoe session? */
+	struct ppp_t *ppp = container_of(ses, typeof(*ppp), ses);
+	struct pppoe_conn_t *conn = container_of(ppp, typeof(*conn), ppp);
+
+	*mac = conn->addr;
+	*sid = conn->sid;
 }
 
 static int init_secret(struct pppoe_serv_t *serv)
@@ -2382,20 +2380,6 @@ static void pppoe_on_del_link(const char *name)
 	}
 	pthread_rwlock_unlock(&serv_lock);
 }
-
-#ifdef HAVE_VPP
-static void pppoe_on_vpp_connection_lost(struct vpp_handler_t *h)
-{
-	struct pppoe_serv_t *serv = container_of(h, typeof(*serv), vpp_handler);
-	/* skip all vpp calls for sessions on this service */
-	serv->is_vpppoe_lost = 1;
-
-	/* terminate pppoe service */
-	serv->stop_cause = TERM_NAS_ERROR;
-	triton_context_call(&serv->ctx, (triton_event_func)_server_stop, serv);
-	log_warn("pppoe: VPP connection lost, stopping the service on: %s ifindex %d\n", serv->ifname, serv->ifindex);
-}
-#endif /* HAVE_VPP */
 
 static void pppoe_init(void)
 {
