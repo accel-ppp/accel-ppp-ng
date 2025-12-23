@@ -16,7 +16,7 @@
 #include <linux/if_ether.h>
 #include <linux/if_pppox.h>
 
-#include <openssl/md5.h>
+#include <openssl/evp.h>
 
 #include "triton.h"
 #include "mempool.h"
@@ -228,15 +228,20 @@ static inline void comp_chap_md5(uint8_t *md5, uint8_t ident,
 				 const void *secret, size_t secret_len,
 				 const void *chall, size_t chall_len)
 {
-	MD5_CTX md5_ctx;
+	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
+	if (evp_ctx == NULL) {
+		return;
+	}
 
-	memset(md5, 0, MD5_DIGEST_LENGTH);
+	memset(md5, 0, EVP_MD_get_size(EVP_md5()));
 
-	MD5_Init(&md5_ctx);
-	MD5_Update(&md5_ctx, &ident, sizeof(ident));
-	MD5_Update(&md5_ctx, secret, secret_len);
-	MD5_Update(&md5_ctx, chall, chall_len);
-	MD5_Final(md5, &md5_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
+	EVP_DigestUpdate(evp_ctx, &ident, sizeof(ident));
+	EVP_DigestUpdate(evp_ctx, secret, secret_len);
+	EVP_DigestUpdate(evp_ctx, chall, chall_len);
+	EVP_DigestFinal_ex(evp_ctx, md5, NULL);
+
+	EVP_MD_CTX_free(evp_ctx);
 }
 
 static inline int nsnr_cmp(uint16_t ns, uint16_t nr)
@@ -410,7 +415,7 @@ static int l2tp_tunnel_genchallresp(uint8_t msgident,
 				    const struct l2tp_conn_t *conn,
 				    struct l2tp_packet_t *pack)
 {
-	uint8_t challresp[MD5_DIGEST_LENGTH];
+	uint8_t challresp[EVP_MAX_MD_SIZE];
 
 	if (conn->challenge == NULL) {
 		if (conn->secret && conn->secret_len > 0) {
@@ -430,7 +435,7 @@ static int l2tp_tunnel_genchallresp(uint8_t msgident,
 	comp_chap_md5(challresp, msgident, conn->secret, conn->secret_len,
 		      conn->challenge, conn->challenge_len);
 	if (l2tp_packet_add_octets(pack, Challenge_Response, challresp,
-				   MD5_DIGEST_LENGTH, 1) < 0) {
+				   EVP_MD_get_size(EVP_md5()), 1) < 0) {
 		log_tunnel(log_error, conn,
 			   "impossible to generate Challenge Response:"
 			   " adding data to packet failed\n");
@@ -444,7 +449,8 @@ static int l2tp_tunnel_checkchallresp(uint8_t msgident,
 				      const struct l2tp_conn_t *conn,
 				      const struct l2tp_attr_t *challresp)
 {
-	uint8_t challref[MD5_DIGEST_LENGTH];
+	uint8_t challref[EVP_MAX_MD_SIZE];
+	size_t md5_digest_length = EVP_MD_get_size(EVP_md5());
 
 	if (conn->secret == NULL || conn->secret_len == 0) {
 		if (challresp) {
@@ -465,7 +471,7 @@ static int l2tp_tunnel_checkchallresp(uint8_t msgident,
 		log_tunnel(log_error, conn, "impossible to authenticate peer:"
 			   " no Challenge Response sent by peer\n");
 		return -1;
-	} else if (challresp->length != MD5_DIGEST_LENGTH) {
+	} else if (challresp->length != md5_digest_length) {
 		log_tunnel(log_error, conn, "impossible to authenticate peer:"
 			   " invalid Challenge Response sent by peer"
 			   " (inconsistent length: %i bytes)\n",
@@ -475,7 +481,7 @@ static int l2tp_tunnel_checkchallresp(uint8_t msgident,
 
 	comp_chap_md5(challref, msgident, conn->secret, conn->secret_len,
 		      conn->challenge, conn->challenge_len);
-	if (memcmp(challref, challresp->val.octets, MD5_DIGEST_LENGTH) != 0) {
+	if (memcmp(challref, challresp->val.octets, md5_digest_length) != 0) {
 		log_tunnel(log_error, conn, "impossible to authenticate peer:"
 			   " invalid Challenge Response sent by peer"
 			   " (wrong secret)\n");
@@ -2295,7 +2301,7 @@ static void l2tp_send_SCCRQ(void *peer_addr)
 				   " from urandom\n");
 		goto pack_err;
 	}
-	chall_len = (chall_len & 0x007F) + MD5_DIGEST_LENGTH;
+	chall_len = (chall_len & 0x007F) + EVP_MD_get_size(EVP_md5());
 	if (l2tp_tunnel_genchall(chall_len, conn, pack) < 0) {
 		log_tunnel(log_error, conn, "impossible to send SCCRQ:"
 			   " Challenge generation failed\n");
@@ -2390,7 +2396,7 @@ static void l2tp_send_SCCRP(struct l2tp_conn_t *conn)
 				   " from urandom\n");
 		goto out_err;
 	}
-	chall_len = (chall_len & 0x007F) + MD5_DIGEST_LENGTH;
+	chall_len = (chall_len & 0x007F) + EVP_MD_get_size(EVP_md5());
 	if (l2tp_tunnel_genchall(chall_len, conn, pack) < 0) {
 		log_tunnel(log_error, conn, "impossible to send SCCRP:"
 			   " Challenge generation failed\n");

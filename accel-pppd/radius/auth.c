@@ -1,8 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <openssl/md5.h>
-#include <openssl/sha.h>
+#include <openssl/evp.h>
 
 #include "triton.h"
 #include "mempool.h"
@@ -17,12 +16,16 @@
 
 static int decrypt_chap_mppe_keys(struct rad_req_t *req, struct rad_attr_t *attr, const uint8_t *challenge, uint8_t *key)
 {
-	MD5_CTX md5_ctx;
-	SHA_CTX sha1_ctx;
-	uint8_t md5[MD5_DIGEST_LENGTH];
-	uint8_t sha1[SHA_DIGEST_LENGTH];
+	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
+	uint8_t md5[EVP_MAX_MD_SIZE];
+	uint8_t sha1[EVP_MAX_MD_SIZE];
 	uint8_t plain[32];
 	int i;
+
+	if (evp_ctx == NULL) {
+		log_ppp_error("radius: can't create EVP context\n");
+		return -1;
+	}
 
 	if (attr->len != 32) {
 		log_ppp_warn("radius: %s: incorrect attribute length (%i)\n", attr->attr->name, attr->len);
@@ -31,36 +34,38 @@ static int decrypt_chap_mppe_keys(struct rad_req_t *req, struct rad_attr_t *attr
 
 	memcpy(plain, attr->val.octets, 32);
 
-	MD5_Init(&md5_ctx);
-	MD5_Update(&md5_ctx, req->serv->secret, strlen(req->serv->secret));
-	MD5_Update(&md5_ctx, req->pack->buf + 4, 16);
-	MD5_Final(md5, &md5_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
+	EVP_DigestUpdate(evp_ctx, req->serv->secret, strlen(req->serv->secret));
+	EVP_DigestUpdate(evp_ctx, req->pack->buf + 4, 16);
+	EVP_DigestFinal_ex(evp_ctx, md5, NULL);
 
 	for (i = 0; i < 16; i++)
 		plain[i] ^= md5[i];
 
-	MD5_Init(&md5_ctx);
-	MD5_Update(&md5_ctx, req->serv->secret, strlen(req->serv->secret));
-	MD5_Update(&md5_ctx, attr->val.octets, 16);
-	MD5_Final(md5, &md5_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
+	EVP_DigestUpdate(evp_ctx, req->serv->secret, strlen(req->serv->secret));
+	EVP_DigestUpdate(evp_ctx, attr->val.octets, 16);
+	EVP_DigestFinal_ex(evp_ctx, md5, NULL);
 
 	for (i = 0; i < 16; i++)
 		plain[i + 16] ^= md5[i];
 
-	SHA1_Init(&sha1_ctx);
-	SHA1_Update(&sha1_ctx, plain + 8, 16);
-	SHA1_Update(&sha1_ctx, plain + 8, 16);
-	SHA1_Update(&sha1_ctx, challenge, 8);
-	SHA1_Final(sha1, &sha1_ctx);
+	EVP_MD_CTX_reset(evp_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_sha1(), NULL);
+	EVP_DigestUpdate(evp_ctx, plain + 8, 16);
+	EVP_DigestUpdate(evp_ctx, plain + 8, 16);
+	EVP_DigestUpdate(evp_ctx, challenge, 8);
+	EVP_DigestFinal_ex(evp_ctx, sha1, NULL);
 
 	memcpy(key, sha1, 16);
 
+	EVP_MD_CTX_free(evp_ctx);
 	return 0;
 }
 
 static int decrypt_mppe_key(struct rad_req_t *req, struct rad_attr_t *attr, uint8_t *key)
 {
-	MD5_CTX md5_ctx;
+	EVP_MD_CTX *evp_ctx = NULL;
 	uint8_t md5[16];
 	uint8_t plain[32];
 	int i;
@@ -75,11 +80,17 @@ static int decrypt_mppe_key(struct rad_req_t *req, struct rad_attr_t *attr, uint
 		return -1;
 	}
 
-	MD5_Init(&md5_ctx);
-	MD5_Update(&md5_ctx, req->serv->secret, strlen(req->serv->secret));
-	MD5_Update(&md5_ctx, req->pack->buf + 4, 16);
-	MD5_Update(&md5_ctx, attr->val.octets, 2);
-	MD5_Final(md5, &md5_ctx);
+	evp_ctx = EVP_MD_CTX_new();
+	if (evp_ctx == NULL) {
+		log_ppp_error("radius: can't create EVP context\n");
+		return -1;
+	}
+
+	EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
+	EVP_DigestUpdate(evp_ctx, req->serv->secret, strlen(req->serv->secret));
+	EVP_DigestUpdate(evp_ctx, req->pack->buf + 4, 16);
+	EVP_DigestUpdate(evp_ctx, attr->val.octets, 2);
+	EVP_DigestFinal_ex(evp_ctx, md5, NULL);
 
 	memcpy(plain, attr->val.octets + 2, 32);
 
@@ -88,18 +99,20 @@ static int decrypt_mppe_key(struct rad_req_t *req, struct rad_attr_t *attr, uint
 
 	if (plain[0] != 16) {
 		log_ppp_warn("radius: %s: incorrect key length (%i)\n", attr->attr->name, plain[0]);
+		EVP_MD_CTX_free(evp_ctx);
 		return -1;
 	}
 
-	MD5_Init(&md5_ctx);
-	MD5_Update(&md5_ctx, req->serv->secret, strlen(req->serv->secret));
-	MD5_Update(&md5_ctx, attr->val.octets + 2, 16);
-	MD5_Final(md5, &md5_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
+	EVP_DigestUpdate(evp_ctx, req->serv->secret, strlen(req->serv->secret));
+	EVP_DigestUpdate(evp_ctx, attr->val.octets + 2, 16);
+	EVP_DigestFinal_ex(evp_ctx, md5, NULL);
 
 	plain[16] ^= md5[0];
 
 	memcpy(key, plain + 1, 16);
 
+	EVP_MD_CTX_free(evp_ctx);
 	return 0;
 }
 
@@ -109,7 +122,7 @@ static uint8_t* encrypt_password(const char *passwd, const char *secret, const u
 	uint8_t *epasswd;
 	int i, j, chunk_cnt;
 	uint8_t b[16], c[16];
-	MD5_CTX ctx;
+	EVP_MD_CTX *evp_ctx = NULL;
 
 	if (strlen(passwd))
 		chunk_cnt = (strlen(passwd) - 1) / 16 + 1;
@@ -128,11 +141,17 @@ static uint8_t* encrypt_password(const char *passwd, const char *secret, const u
 	memcpy(epasswd, passwd, strlen(passwd));
 	memcpy(c, RA, 16);
 
+	evp_ctx = EVP_MD_CTX_new();
+	if (evp_ctx == NULL) {
+		log_ppp_error("radius: can't create EVP context\n");
+		return NULL;
+	}
+
 	for (i = 0; i < chunk_cnt; i++) {
-		MD5_Init(&ctx);
-		MD5_Update(&ctx, secret, strlen(secret));
-		MD5_Update(&ctx, c, 16);
-		MD5_Final(b, &ctx);
+		EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
+		EVP_DigestUpdate(evp_ctx, secret, strlen(secret));
+		EVP_DigestUpdate(evp_ctx, c, 16);
+		EVP_DigestFinal_ex(evp_ctx, b, NULL);
 
 		for(j = 0; j < 16; j++)
 			epasswd[i * 16 + j] ^= b[j];
@@ -141,6 +160,8 @@ static uint8_t* encrypt_password(const char *passwd, const char *secret, const u
 	}
 
 	*epasswd_len = chunk_cnt * 16;
+
+	EVP_MD_CTX_free(evp_ctx);
 	return epasswd;
 }
 

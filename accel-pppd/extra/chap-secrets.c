@@ -6,8 +6,6 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#include <openssl/md4.h>
-#include <openssl/sha.h>
 #include <openssl/des.h>
 #include <openssl/evp.h>
 
@@ -137,7 +135,10 @@ static struct cs_pd_t *create_pd(struct ap_session *ses, const char *username)
 		unsigned int size = 0;
 		list_for_each_entry(hc, &hash_chain, entry) {
 			md_ctx = EVP_MD_CTX_new();
-			EVP_MD_CTX_init(md_ctx);
+			if (md_ctx == NULL) {
+				log_error("chap-secrets: can't create EVP cipher context\n");
+				return NULL;
+			}
 			EVP_DigestInit_ex(md_ctx, hc->md, NULL);
 			EVP_DigestUpdate(md_ctx, size == 0 ? (void *)username : (void *)hash, size == 0 ? strlen(username) : size);
 			EVP_DigestFinal_ex(md_ctx, hash, &size);
@@ -338,15 +339,20 @@ static char* get_passwd(struct pwdb_t *pwdb, struct ap_session *ses, const char 
 
 static void des_encrypt(const uint8_t *input, const uint8_t *key, uint8_t *output)
 {
-	int i, j, parity;
+	int i, j, parity, outl;
 	union
 	{
 		uint64_t u64;
 		uint8_t buf[8];
 	} p_key;
-	DES_cblock cb;
-	DES_cblock res;
-	DES_key_schedule ks;
+
+	unsigned char cb[EVP_MAX_KEY_LENGTH];
+	unsigned char padding[EVP_MAX_BLOCK_LENGTH];
+	EVP_CIPHER_CTX *evp_ctx = EVP_CIPHER_CTX_new();
+	if (evp_ctx == NULL) {
+		log_error("chap-secrets: can't create EVP cipher context\n");
+		return;
+	}
 
 	memcpy(p_key.buf, key, 7);
 	p_key.u64 = be64toh(p_key.u64);
@@ -359,19 +365,25 @@ static void des_encrypt(const uint8_t *input, const uint8_t *key, uint8_t *outpu
 		cb[i] |= (~parity) & 1;
 	}
 
-	DES_set_key_checked(&cb, &ks);
-	memcpy(cb, input, 8);
-	DES_ecb_encrypt(&cb, &res, &ks, DES_ENCRYPT);
-	memcpy(output, res, 8);
+	EVP_EncryptInit_ex(evp_ctx, EVP_des_ecb(), NULL, cb, NULL);
+	EVP_CIPHER_CTX_set_padding(evp_ctx, 0);
+	EVP_EncryptUpdate(evp_ctx, output, &outl, input, EVP_CIPHER_block_size(EVP_des_ecb()));
+	EVP_EncryptFinal_ex(evp_ctx, padding, &outl);
+	EVP_CIPHER_CTX_free(evp_ctx);
 }
 
 static int auth_pap(struct cs_pd_t *pd, const char *username, va_list args)
 {
 	const char *passwd = va_arg(args, const char *);
-	MD4_CTX md4_ctx;
+	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
 	unsigned char z_hash[21];
 	char *u_passwd;
 	int i, len = strlen(passwd);
+
+	if (evp_ctx == NULL) {
+		log_error("chap-secrets: can't create EVP context\n");
+		return PWDB_DENIED;
+	}
 
 	u_passwd = _malloc(len * 2);
 	for (i = 0; i< len; i++) {
@@ -380,9 +392,12 @@ static int auth_pap(struct cs_pd_t *pd, const char *username, va_list args)
 	}
 
 	memset(z_hash, 0, sizeof(z_hash));
-	MD4_Init(&md4_ctx);
-	MD4_Update(&md4_ctx, u_passwd, len * 2);
-	MD4_Final(z_hash, &md4_ctx);
+
+	EVP_DigestInit_ex(evp_ctx, EVP_md4(), NULL);
+	EVP_DigestUpdate(evp_ctx, u_passwd, len * 2);
+	EVP_DigestFinal_ex(evp_ctx, z_hash, NULL);
+
+	EVP_MD_CTX_free(evp_ctx);
 
 	_free(u_passwd);
 
@@ -408,8 +423,7 @@ static int auth_chap_md5(struct cs_pd_t *pd, const char *username, va_list args)
 
 static void derive_mppe_keys_mschap_v1(struct ap_session *ses, const uint8_t *z_hash, const uint8_t *challenge, int challenge_len)
 {
-	MD4_CTX md4_ctx;
-	SHA_CTX sha_ctx;
+	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
 	uint8_t digest[20];
 	struct ppp_t *ppp = container_of(ses, typeof(*ppp), ses);
 
@@ -420,17 +434,26 @@ static void derive_mppe_keys_mschap_v1(struct ap_session *ses, const uint8_t *z_
 		.send_key = digest,
 	};
 
+	if (evp_ctx == NULL) {
+		log_error("chap-secrets: can't create EVP context\n");
+		return;
+	}
+
 	//NtPasswordHashHash
-	MD4_Init(&md4_ctx);
-	MD4_Update(&md4_ctx, z_hash, 16);
-	MD4_Final(digest, &md4_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_md4(), NULL);
+	EVP_DigestUpdate(evp_ctx, z_hash, 16);
+	EVP_DigestFinal_ex(evp_ctx, digest, NULL);
+
+	EVP_MD_CTX_reset(evp_ctx);
 
 	//Get_Start_Key
-	SHA1_Init(&sha_ctx);
-	SHA1_Update(&sha_ctx, digest, 16);
-	SHA1_Update(&sha_ctx, digest, 16);
-	SHA1_Update(&sha_ctx, challenge, challenge_len);
-	SHA1_Final(digest, &sha_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_sha1(), NULL);
+	EVP_DigestUpdate(evp_ctx, digest, 16);
+	EVP_DigestUpdate(evp_ctx, digest, 16);
+	EVP_DigestUpdate(evp_ctx, challenge, challenge_len);
+	EVP_DigestFinal_ex(evp_ctx, digest, NULL);
+
+	EVP_MD_CTX_free(evp_ctx);
 
 	triton_event_fire(EV_MPPE_KEYS, &ev_mppe);
 }
@@ -464,10 +487,9 @@ int auth_mschap_v1(struct ap_session *ses, struct cs_pd_t *pd, const char *usern
 
 static void generate_mschap_response(const uint8_t *nt_response, const uint8_t *c_hash, const uint8_t *z_hash, char *authenticator)
 {
-	MD4_CTX md4_ctx;
-	SHA_CTX sha_ctx;
-	uint8_t pw_hash[MD4_DIGEST_LENGTH];
-	uint8_t response[SHA_DIGEST_LENGTH];
+	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
+	uint8_t pw_hash[EVP_MAX_MD_SIZE];
+	uint8_t response[EVP_MAX_MD_SIZE];
 	int i;
 
 	uint8_t magic1[39] =
@@ -482,22 +504,30 @@ static void generate_mschap_response(const uint8_t *nt_response, const uint8_t *
           0x65, 0x20, 0x69, 0x74, 0x65, 0x72, 0x61, 0x74, 0x69, 0x6F,
           0x6E};
 
+	if (evp_ctx == NULL) {
+		log_error("chap-secrets: can't create EVP context\n");
+		return;
+	}
 
-	MD4_Init(&md4_ctx);
-	MD4_Update(&md4_ctx, z_hash, 16);
-	MD4_Final(pw_hash, &md4_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_md4(), NULL);
+	EVP_DigestUpdate(evp_ctx, z_hash, 16);
+	EVP_DigestFinal_ex(evp_ctx, pw_hash, NULL);
 
-	SHA1_Init(&sha_ctx);
-	SHA1_Update(&sha_ctx, pw_hash, 16);
-	SHA1_Update(&sha_ctx, nt_response, 24);
-	SHA1_Update(&sha_ctx, magic1, 39);
-	SHA1_Final(response, &sha_ctx);
+	EVP_MD_CTX_reset(evp_ctx);
 
-	SHA1_Init(&sha_ctx);
-	SHA1_Update(&sha_ctx, response, 20);
-	SHA1_Update(&sha_ctx, c_hash, 8);
-	SHA1_Update(&sha_ctx, magic2, 41);
-	SHA1_Final(response, &sha_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_sha1(), NULL);
+	EVP_DigestUpdate(evp_ctx, pw_hash, 16);
+	EVP_DigestUpdate(evp_ctx, nt_response, 24);
+	EVP_DigestUpdate(evp_ctx, magic1, 39);
+	EVP_DigestFinal_ex(evp_ctx, response, NULL);
+
+	EVP_DigestInit_ex(evp_ctx, EVP_sha1(), NULL);
+	EVP_DigestUpdate(evp_ctx, response, 20);
+	EVP_DigestUpdate(evp_ctx, c_hash, 8);
+	EVP_DigestUpdate(evp_ctx, magic2, 41);
+	EVP_DigestFinal_ex(evp_ctx, response, NULL);
+
+	EVP_MD_CTX_free(evp_ctx);
 
 	for (i = 0; i < 20; i++)
 		sprintf(authenticator + i*2, "%02X", response[i]);
@@ -506,8 +536,7 @@ static void generate_mschap_response(const uint8_t *nt_response, const uint8_t *
 static void derive_mppe_keys_mschap_v2(struct ap_session *ses, const uint8_t *z_hash, const uint8_t *nt_hash)
 {
 	struct ppp_t *ppp = container_of(ses, typeof(*ppp), ses);
-	MD4_CTX md4_ctx;
-	SHA_CTX sha_ctx;
+	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
 	uint8_t digest[20];
 	uint8_t send_key[20];
 	uint8_t recv_key[20];
@@ -558,33 +587,42 @@ static void derive_mppe_keys_mschap_v2(struct ap_session *ses, const uint8_t *z_
 		.send_key = send_key,
 	};
 
+	if (evp_ctx == NULL) {
+		log_error("chap-secrets: can't create EVP context\n");
+		return;
+	}
+
 	//NtPasswordHashHash
-	MD4_Init(&md4_ctx);
-	MD4_Update(&md4_ctx, z_hash, 16);
-	MD4_Final(digest, &md4_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_md4(), NULL);
+	EVP_DigestUpdate(evp_ctx, z_hash, 16);
+	EVP_DigestFinal_ex(evp_ctx, digest, NULL);
+
+	EVP_MD_CTX_reset(evp_ctx);
 
 	//GetMasterKey
-	SHA1_Init(&sha_ctx);
-	SHA1_Update(&sha_ctx, digest, 16);
-	SHA1_Update(&sha_ctx, nt_hash, 24);
-	SHA1_Update(&sha_ctx, magic1, sizeof(magic1));
-	SHA1_Final(digest, &sha_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_sha1(), NULL);
+	EVP_DigestUpdate(evp_ctx, digest, 16);
+	EVP_DigestUpdate(evp_ctx, nt_hash, 24);
+	EVP_DigestUpdate(evp_ctx, magic1, sizeof(magic1));
+	EVP_DigestFinal_ex(evp_ctx, digest, NULL);
 
 	//send key
-	SHA1_Init(&sha_ctx);
-	SHA1_Update(&sha_ctx, digest, 16);
-	SHA1_Update(&sha_ctx, pad1, sizeof(pad1));
-	SHA1_Update(&sha_ctx, magic3, sizeof(magic2));
-	SHA1_Update(&sha_ctx, pad2, sizeof(pad2));
-	SHA1_Final(send_key, &sha_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_sha1(), NULL);
+	EVP_DigestUpdate(evp_ctx, digest, 16);
+	EVP_DigestUpdate(evp_ctx, pad1, sizeof(pad1));
+	EVP_DigestUpdate(evp_ctx, magic3, sizeof(magic3));
+	EVP_DigestUpdate(evp_ctx, pad2, sizeof(pad2));
+	EVP_DigestFinal_ex(evp_ctx, send_key, NULL);
 
 	//recv key
-	SHA1_Init(&sha_ctx);
-	SHA1_Update(&sha_ctx, digest, 16);
-	SHA1_Update(&sha_ctx, pad1, sizeof(pad1));
-	SHA1_Update(&sha_ctx, magic2, sizeof(magic3));
-	SHA1_Update(&sha_ctx, pad2, sizeof(pad2));
-	SHA1_Final(recv_key, &sha_ctx);
+	EVP_DigestInit_ex(evp_ctx, EVP_sha1(), NULL);
+	EVP_DigestUpdate(evp_ctx, digest, 16);
+	EVP_DigestUpdate(evp_ctx, pad1, sizeof(pad1));
+	EVP_DigestUpdate(evp_ctx, magic2, sizeof(magic2));
+	EVP_DigestUpdate(evp_ctx, pad2, sizeof(pad2));
+	EVP_DigestFinal_ex(evp_ctx, recv_key, NULL);
+
+	EVP_MD_CTX_free(evp_ctx);
 
 	triton_event_fire(EV_MPPE_KEYS, &ev_mppe);
 }
@@ -600,14 +638,21 @@ int auth_mschap_v2(struct ap_session *ses, struct cs_pd_t *pd, const char *usern
 	char *authenticator = va_arg(args, char *);
 	uint8_t z_hash[21];
 	uint8_t nt_hash[24];
-	uint8_t c_hash[SHA_DIGEST_LENGTH];
-	SHA_CTX sha_ctx;
+	uint8_t c_hash[EVP_MAX_MD_SIZE];
+	EVP_MD_CTX *sha_ctx = EVP_MD_CTX_new();
 
-	SHA1_Init(&sha_ctx);
-	SHA1_Update(&sha_ctx, peer_challenge, 16);
-	SHA1_Update(&sha_ctx, challenge, 16);
-	SHA1_Update(&sha_ctx, username, strlen(username));
-	SHA1_Final(c_hash, &sha_ctx);
+	if (sha_ctx == NULL) {
+		log_error("chap-secrets: can't create EVP context\n");
+		return -1;
+	}
+
+	EVP_DigestInit_ex(sha_ctx, EVP_sha1(), NULL);
+	EVP_DigestUpdate(sha_ctx, peer_challenge, 16);
+	EVP_DigestUpdate(sha_ctx, challenge, 16);
+	EVP_DigestUpdate(sha_ctx, username, strlen(username));
+	EVP_DigestFinal_ex(sha_ctx, c_hash, NULL);
+
+	EVP_MD_CTX_free(sha_ctx);
 
 	memcpy(z_hash, pd->passwd, 16);
 	memset(z_hash + 16, 0, sizeof(z_hash) - 16);
@@ -703,7 +748,7 @@ static void parse_hash_chain(const char *opt)
 		f = *ptr2 == 0;
 		*ptr2 = 0;
 		hc = _malloc(sizeof(*hc));
-		hc->md = EVP_get_digestbyname(ptr1);
+		hc->md = EVP_MD_fetch(NULL, ptr1, NULL);
 		if (!hc->md) {
 			log_error("chap-secrets: digest '%s' is unavailable\n", ptr1);
 			_free(hc);

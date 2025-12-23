@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <arpa/inet.h>
 
-#include <openssl/md5.h>
+#include <openssl/evp.h>
 
 #include "log.h"
 #include "events.h"
@@ -290,8 +290,8 @@ static void auth_result(struct chap_auth_data *ad, int res)
 
 static void chap_recv_response(struct chap_auth_data *ad, struct chap_hdr *hdr)
 {
-	MD5_CTX md5_ctx;
-	uint8_t md5[MD5_DIGEST_LENGTH];
+	EVP_MD_CTX *evp_ctx = NULL;
+	uint8_t md5[EVP_MAX_MD_SIZE];
 	char *passwd;
 	char *name;
 	int r;
@@ -364,13 +364,23 @@ static void chap_recv_response(struct chap_auth_data *ad, struct chap_hdr *hdr)
 			return;
 		}
 
-		MD5_Init(&md5_ctx);
-		MD5_Update(&md5_ctx,&msg->hdr.id,1);
-		MD5_Update(&md5_ctx,passwd,strlen(passwd));
-		MD5_Update(&md5_ctx,ad->val,VALUE_SIZE);
-		MD5_Final(md5,&md5_ctx);
+		evp_ctx = EVP_MD_CTX_new();
+		if (evp_ctx == NULL) {
+			_free(name);
+			_free(passwd);
+			if (conf_ppp_verbose)
+				log_ppp_error("chap-md5: can't create EVP context\n");
+			chap_send_failure(ad);
+			return;
+		}
+		EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
+		EVP_DigestUpdate(evp_ctx, &msg->hdr.id, 1);
+		EVP_DigestUpdate(evp_ctx, passwd, strlen(passwd));
+		EVP_DigestUpdate(evp_ctx, ad->val, VALUE_SIZE);
+		EVP_DigestFinal_ex(evp_ctx, md5, NULL);
+		EVP_MD_CTX_free(evp_ctx);
 
-		if (memcmp(md5,msg->val,sizeof(md5)))
+		if (memcmp(md5,msg->val, EVP_MD_get_size(EVP_md5())))
 		{
 			if (conf_ppp_verbose)
 				log_ppp_warn("chap-md5: challenge response mismatch\n");

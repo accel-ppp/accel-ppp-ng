@@ -11,7 +11,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#include <openssl/md5.h>
+#include <openssl/evp.h>
 
 #include "log.h"
 #include "triton.h"
@@ -360,15 +360,22 @@ void rad_server_reply(struct rad_server_t *s)
 
 static int req_set_RA(struct rad_req_t *req, const char *secret)
 {
-	MD5_CTX ctx;
+	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
 
-	if (rad_packet_build(req->pack, req->RA))
+	if (evp_ctx == NULL)
 		return -1;
 
-	MD5_Init(&ctx);
-	MD5_Update(&ctx, req->pack->buf, req->pack->len);
-	MD5_Update(&ctx, secret, strlen(secret));
-	MD5_Final(req->pack->buf + 4, &ctx);
+	if (rad_packet_build(req->pack, req->RA)) {
+		EVP_MD_CTX_free(evp_ctx);
+		return -1;
+	}
+
+	EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
+	EVP_DigestUpdate(evp_ctx, req->pack->buf, req->pack->len);
+	EVP_DigestUpdate(evp_ctx, secret, strlen(secret));
+	EVP_DigestFinal_ex(evp_ctx, req->pack->buf + 4, NULL);
+
+	EVP_MD_CTX_free(evp_ctx);
 
 	return 0;
 }

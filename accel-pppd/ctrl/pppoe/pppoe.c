@@ -707,94 +707,119 @@ static void print_packet(const char *ifname, const char *op, uint8_t *pack)
 	log_info2("]\n");
 }
 
-static void generate_cookie(struct pppoe_serv_t *serv, const uint8_t *src, uint8_t *cookie, const struct pppoe_tag *host_uniq, const struct pppoe_tag *relay_sid)
+static int generate_cookie(struct pppoe_serv_t *serv, const uint8_t *src, uint8_t *cookie, const struct pppoe_tag *host_uniq, const struct pppoe_tag *relay_sid)
 {
-	MD5_CTX ctx;
-	DES_cblock key;
-	DES_key_schedule ks;
-	int i;
-	union {
-		DES_cblock b[3];
-		uint8_t raw[24];
-	} u1, u2;
+	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();
+	EVP_CIPHER_CTX *des_ctx = EVP_CIPHER_CTX_new();
+	unsigned char key[EVP_MAX_KEY_LENGTH];
+	int i, outl;
+	uint8_t u1[24];
+	uint8_t u2[24];
+	uint8_t padding[EVP_MAX_BLOCK_LENGTH];
 	struct timespec ts;
+
+	if (evp_ctx == NULL || des_ctx == NULL) {
+		log_error("pppoe: can't create EVP contexts for cookie: hash %p cipher %p\n", evp_ctx, des_ctx);
+		if (des_ctx != NULL)
+			EVP_CIPHER_CTX_free(des_ctx);
+		if (evp_ctx != NULL)
+			EVP_MD_CTX_free(evp_ctx);
+		return -1;
+	}
 
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 
 	memcpy(key, serv->hwaddr, 6);
 	key[6] = src[4];
 	key[7] = src[5];
-	DES_set_key(&key, &ks);
+	EVP_EncryptInit_ex(des_ctx, EVP_des_ecb(), NULL, key, NULL);
+	EVP_CIPHER_CTX_set_padding(des_ctx, 0);
 
-	MD5_Init(&ctx);
-	MD5_Update(&ctx, serv->secret, SECRET_LENGTH);
-	MD5_Update(&ctx, serv->hwaddr, ETH_ALEN);
-	MD5_Update(&ctx, src, ETH_ALEN);
+	EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
+	EVP_DigestUpdate(evp_ctx, serv->secret, SECRET_LENGTH);
+	EVP_DigestUpdate(evp_ctx, serv->hwaddr, ETH_ALEN);
+	EVP_DigestUpdate(evp_ctx, src, ETH_ALEN);
 	if (relay_sid)
-		MD5_Update(&ctx, relay_sid->tag_data, ntohs(relay_sid->tag_len));
-	MD5_Final(u1.raw, &ctx);
+		EVP_DigestUpdate(evp_ctx, relay_sid->tag_data, ntohs(relay_sid->tag_len));
+	EVP_DigestFinal_ex(evp_ctx, u1, NULL);
 
 	if (host_uniq) {
 		uint8_t buf[16];
-		MD5_Init(&ctx);
-		MD5_Update(&ctx, serv->secret, SECRET_LENGTH);
-		MD5_Update(&ctx, host_uniq->tag_data, ntohs(host_uniq->tag_len));
-		MD5_Final(buf, &ctx);
+		EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
+		EVP_DigestUpdate(evp_ctx, serv->secret, SECRET_LENGTH);
+		EVP_DigestUpdate(evp_ctx, host_uniq->tag_data, ntohs(host_uniq->tag_len));
+		EVP_DigestFinal_ex(evp_ctx, buf, NULL);
 		for (i = 0; i < 4; i++)
-			u1.raw[16 + i] = buf[i] ^ buf[i + 4] ^ buf[i + 8] ^ buf[i + 12];
+			u1[16 + i] = buf[i] ^ buf[i + 4] ^ buf[i + 8] ^ buf[i + 12];
 	} else
-		memset(u1.raw + 16, 0, 4);
+		memset(u1 + 16, 0, 4);
 
-	*(uint32_t *)(u1.raw + 20) = ts.tv_sec + conf_cookie_timeout;
+	*(uint32_t *)(u1 + 20) = ts.tv_sec + conf_cookie_timeout;
 
-	for (i = 0; i < 3; i++)
-		DES_ecb_encrypt(&u1.b[i], &u2.b[i], &ks, DES_ENCRYPT);
+	EVP_EncryptUpdate(des_ctx, u2, &outl, u1, 24);
+	EVP_EncryptFinal_ex(des_ctx, padding, &outl);
 
-	for (i = 0; i < 3; i++)
-		DES_ecb_encrypt(&u2.b[i], &u1.b[i], &serv->des_ks, DES_ENCRYPT);
+	EVP_EncryptUpdate(serv->des_enc_ctx, u1, &outl, u2, 24);
 
-	memcpy(cookie, u1.raw, 24);
+	memcpy(cookie, u1, 24);
+
+	EVP_CIPHER_CTX_free(des_ctx);
+	EVP_MD_CTX_free(evp_ctx);
+
+	return 0;
 }
 
 static int check_cookie(struct pppoe_serv_t *serv, const uint8_t *src, const uint8_t *cookie, const struct pppoe_tag *relay_sid)
 {
-	MD5_CTX ctx;
-	DES_cblock key;
-	DES_key_schedule ks;
-	int i;
-	union {
-		DES_cblock b[3];
-		uint8_t raw[24];
-	} u1, u2;
+	EVP_MD_CTX *evp_ctx = NULL;
+	EVP_CIPHER_CTX *des_ctx = EVP_CIPHER_CTX_new();
+	unsigned char key[EVP_MAX_KEY_LENGTH];
+	uint8_t u1[24];
+	uint8_t u2[24];
+	uint8_t padding[EVP_MAX_BLOCK_LENGTH];
 	struct timespec ts;
+	int outl;
+
+	if (des_ctx == NULL) {
+		log_error("pppoe: can't create EVP cipher context\n");
+		return -1;
+	}
 
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 
 	memcpy(key, serv->hwaddr, 6);
 	key[6] = src[4];
 	key[7] = src[5];
-	DES_set_key(&key, &ks);
 
-	memcpy(u1.raw, cookie, 24);
+	EVP_DecryptInit_ex(des_ctx, EVP_des_ecb(), NULL, key, NULL);
+	EVP_CIPHER_CTX_set_padding(des_ctx, 0);
 
-	for (i = 0; i < 3; i++)
-		DES_ecb_encrypt(&u1.b[i], &u2.b[i], &serv->des_ks, DES_DECRYPT);
+	memcpy(u1, cookie, 24);
 
-	for (i = 0; i < 3; i++)
-		DES_ecb_encrypt(&u2.b[i], &u1.b[i], &ks, DES_DECRYPT);
+	EVP_DecryptUpdate(serv->des_dec_ctx, u2, &outl, u1, 24);
+	EVP_DecryptUpdate(des_ctx, u1, &outl, u2, 24);
+	EVP_DecryptFinal_ex(des_ctx, padding, &outl);
 
-	if (*(uint32_t *)(u1.raw + 20) < ts.tv_sec)
+	EVP_CIPHER_CTX_free(des_ctx);
+
+	if (*(uint32_t *)(u1 + 20) < ts.tv_sec)
 		return 1;
 
-	MD5_Init(&ctx);
-	MD5_Update(&ctx, serv->secret, SECRET_LENGTH);
-	MD5_Update(&ctx, serv->hwaddr, ETH_ALEN);
-	MD5_Update(&ctx, src, ETH_ALEN);
+	evp_ctx = EVP_MD_CTX_new();
+	if (evp_ctx == NULL) {
+		log_error("pppoe: can't create EVP md context\n");
+		return -1;
+	}
+	EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
+	EVP_DigestUpdate(evp_ctx, serv->secret, SECRET_LENGTH);
+	EVP_DigestUpdate(evp_ctx, serv->hwaddr, ETH_ALEN);
+	EVP_DigestUpdate(evp_ctx, src, ETH_ALEN);
 	if (relay_sid)
-		MD5_Update(&ctx, relay_sid->tag_data, ntohs(relay_sid->tag_len));
-	MD5_Final(u2.raw, &ctx);
+		EVP_DigestUpdate(evp_ctx, relay_sid->tag_data, ntohs(relay_sid->tag_len));
+	EVP_DigestFinal_ex(evp_ctx, u2, NULL);
 
-	return memcmp(u1.raw, u2.raw, 16);
+	EVP_MD_CTX_free(evp_ctx);
+	return memcmp(u1, u2, 16);
 }
 
 static void setup_header(uint8_t *pack, const uint8_t *src, const uint8_t *dst, int code, uint16_t sid)
@@ -875,7 +900,10 @@ static void pppoe_send_PADO(struct pppoe_serv_t *serv, const uint8_t *addr, cons
 	if (service_name)
 		add_tag2(pack, sizeof(pack), service_name);
 
-	generate_cookie(serv, addr, cookie, host_uniq, relay_sid);
+	if (generate_cookie(serv, addr, cookie, host_uniq, relay_sid)) {
+		log_error("pppoe: can't generate the cookie\n");
+		return;
+	}
 
 	add_tag(pack, sizeof(pack), TAG_AC_COOKIE, cookie, COOKIE_LENGTH);
 
@@ -1753,6 +1781,12 @@ void pppoe_server_free(struct pppoe_serv_t *serv)
 	}
 #endif /* HAVE_VPP */
 
+	if (serv->des_enc_ctx)
+		EVP_CIPHER_CTX_free(serv->des_enc_ctx);
+
+	if (serv->des_dec_ctx)
+		EVP_CIPHER_CTX_free(serv->des_dec_ctx);
+
 	_free(serv->ifname);
 	_free(serv);
 }
@@ -1783,16 +1817,31 @@ void __export pppoe_get_stat(unsigned int **starting, unsigned int **active)
 
 static int init_secret(struct pppoe_serv_t *serv)
 {
-	DES_cblock key;
+	unsigned char key[EVP_MAX_KEY_LENGTH];
 
 	if (read(urandom_fd, serv->secret, SECRET_LENGTH) < 0) {
 		log_error("pppoe: failed to read /dev/urandom: %s\n", strerror(errno));
 		return -1;
 	}
 
-	memset(key, 0, sizeof(key));
-	DES_random_key(&key);
-	DES_set_key(&key, &serv->des_ks);
+	RAND_bytes(key, sizeof(key));
+
+	serv->des_enc_ctx = EVP_CIPHER_CTX_new();
+	if (serv->des_enc_ctx == NULL) {
+		log_error("pppoe: can't create EVP cipher context for encryption\n");
+		return -1;
+	}
+	serv->des_dec_ctx = EVP_CIPHER_CTX_new();
+	if (serv->des_dec_ctx == NULL) {
+		EVP_CIPHER_CTX_free(serv->des_enc_ctx);
+		log_error("pppoe: can't create EVP cipher context for decryption\n");
+		return -1;
+	}
+
+	EVP_EncryptInit_ex(serv->des_enc_ctx, EVP_des_ecb(), NULL, key, NULL);
+	EVP_CIPHER_CTX_set_padding(serv->des_enc_ctx, 0);
+	EVP_DecryptInit_ex(serv->des_dec_ctx, EVP_des_ecb(), NULL, key, NULL);
+	EVP_CIPHER_CTX_set_padding(serv->des_dec_ctx, 0);
 
 	return 0;
 }

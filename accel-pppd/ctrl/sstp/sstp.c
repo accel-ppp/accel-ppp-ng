@@ -2584,21 +2584,24 @@ static void ssl_load_config(struct sstp_serv_t *serv, const char *servername)
 #ifdef OPENSSL_NO_DH
 			log_warn("sstp: %s warning: %s is not suported\n", "ssl-protocol", "DH");
 #else
-			DH *dh;
+			EVP_PKEY *dh;
 
 			if (BIO_read_filename(in, opt) <= 0) {
 				log_error("sstp: %s error: %s\n", "ssl-dhparam", ERR_error_string(ERR_get_error(), NULL));
 				goto error;
 			}
 
-			dh = PEM_read_bio_DHparams(in, NULL, NULL, NULL);
+			dh = PEM_read_bio_Parameters(in, NULL);
 			if (dh == NULL) {
 				log_error("sstp: %s error: %s\n", "ssl-dhparam", ERR_error_string(ERR_get_error(), NULL));
 				goto error;
 			}
 
-			SSL_CTX_set_tmp_dh(ssl_ctx, dh);
-			DH_free(dh);
+			if (SSL_CTX_set0_tmp_dh_pkey(ssl_ctx, dh) != 1) {
+				log_error("sstp: %s error: %s\n", "ssl-dhparam", ERR_error_string(ERR_get_error(), NULL));
+				EVP_PKEY_free(dh);
+				goto error;
+			}
 #endif
 		}
 
