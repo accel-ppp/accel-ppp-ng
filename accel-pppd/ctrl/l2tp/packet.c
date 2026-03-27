@@ -419,6 +419,8 @@ int l2tp_recv(int fd, struct l2tp_packet_t **p, struct in_pktinfo *pkt_info,
 			}
 
 			if (avp->flags & L2TP_AVP_FLAG_H) {
+				uint16_t orig_attr_len;
+
 				if (!RV) {
 					if (conf_verbose)
 						log_warn("l2tp: incorrect avp received (type=%i, H=1, but Random-Vector is not received)\n", ntohs(avp->type));
@@ -434,7 +436,22 @@ int l2tp_recv(int fd, struct l2tp_packet_t **p, struct in_pktinfo *pkt_info,
 				if (decode_avp(avp, RV, secret, secret_len) < 0)
 					goto out_err;
 
-				orig_avp_len = ntohs(*(uint16_t *)avp->val) + sizeof(*avp);
+				/* Extract original attribute length from the first two bytes of the decrypted value */
+				memcpy(&orig_attr_len, avp->val, sizeof(orig_attr_len));
+				orig_attr_len = ntohs(orig_attr_len);
+				if (orig_attr_len < sizeof(uint16_t)) {
+					if (conf_verbose)
+						log_warn("l2tp: hidden avp rejected: invalid orig_attr_len=%hu (too small)\n", orig_attr_len);
+					goto out_err;
+				}
+
+				size_t total_avp_len = (size_t)orig_attr_len + sizeof(*avp);
+				if (total_avp_len > avp_len) {
+					if (conf_verbose)
+						log_warn("l2tp: hidden avp rejected: orig_attr_len=%hu (total %zu) exceeds avp_len=%hu\n", orig_attr_len, total_avp_len, avp_len);
+					goto out_err;
+				}
+				orig_avp_len = total_avp_len;
 				orig_avp_val = avp->val + sizeof(uint16_t);
 			} else {
 				orig_avp_len = avp_len;
