@@ -5,7 +5,7 @@ on:
   pull_request:
   push:
     branches:
-      - master
+      - current
 
 jobs:
   Build-in-VM:
@@ -33,7 +33,7 @@ jobs:
           git build-essential cmake gcc linux-headers-`uname -r`
           libpcre2-dev libssl-dev liblua5.1-0-dev kmod
       - name: Check out repository code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: mkdir build
@@ -126,7 +126,7 @@ jobs:
           sed 's/linux-headers-//'` >> $GITHUB_ENV;
           cat $GITHUB_ENV
       - name: Check out repository code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: mkdir build
@@ -191,7 +191,7 @@ jobs:
           sed 's/linux-headers-//'` >> $GITHUB_ENV;
           cat $GITHUB_ENV
       - name: Check out repository code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: mkdir build
@@ -225,7 +225,7 @@ jobs:
         run: >
           apk update && apk add --no-cache git cmake make g++ pcre2-dev libressl-dev linux-headers libucontext-dev lua5.1-dev
       - name: Check out repository code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: mkdir build
