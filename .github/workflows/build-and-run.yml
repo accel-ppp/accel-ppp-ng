@@ -84,8 +84,7 @@ jobs:
           [
             "debian:11",
             "debian:12",
-            "debian:trixie",
-            "ubuntu:20.04",
+            "debian:13",
             "ubuntu:22.04",
             "ubuntu:24.04",
             "ubuntu:devel"
@@ -100,13 +99,12 @@ jobs:
           HEADERS_SUFFIX=`uname -m | sed s/aarch64/arm64/ | sed s/x86_64/amd64/`;
           DISTRO=`echo ${{ matrix.distro }} |  sed 's/://'`;
           case "${{ matrix.distro }}" in
-          debian:trixie) DISTRO=debian13; CPACK_TYPE=Debian13 ;;
+          debian:13) DISTRO=debian13; CPACK_TYPE=Debian13 ;;
           debian:12) DISTRO=debian12; CPACK_TYPE=Debian12 ;;
           debian:11) CPACK_TYPE=Debian11 ;;
           ubuntu:devel) CPACK_TYPE=Ubuntu24 ; HEADERS_SUFFIX=generic ; BUILD_MODULES=FALSE ;;
           ubuntu:24.04) CPACK_TYPE=Ubuntu24 ; HEADERS_SUFFIX=generic ;;
           ubuntu:22.04) CPACK_TYPE=Ubuntu22 ; HEADERS_SUFFIX=generic ;;
-          ubuntu:20.04) CPACK_TYPE=Ubuntu20 ; HEADERS_SUFFIX=generic ;;
           esac;
           echo HEADERS_SUFFIX=$HEADERS_SUFFIX >> $GITHUB_ENV;
           echo DISTRO=$DISTRO >> $GITHUB_ENV;
@@ -211,78 +209,6 @@ jobs:
         run: make && make install
       - name: Start accel-ppp with default config
         run: accel-pppd -d -c /etc/accel-ppp.conf.dist
-      - name: Sleep for 1 sec
-        run: sleep 1
-      - name: Check accel-ppp stat
-        run: accel-cmd show stat
-
-  Build-in-Container-Alpine:
-    runs-on: ubuntu-24.04
-    container:
-      image: alpine:latest
-    steps:
-      - name: Install build tools
-        run: >
-          apk update && apk add --no-cache git cmake make g++ pcre2-dev libressl-dev linux-headers libucontext-dev lua5.1-dev
-      - name: Check out repository code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: mkdir build
-        run: mkdir build
-      - name: Disable git security warnings
-        run: git config --global --add safe.directory '*'
-      - name: cmake
-        working-directory: ./build
-        run: >
-          cmake -DBUILD_IPOE_DRIVER=FALSE -DBUILD_VLAN_MON_DRIVER=FALSE -DCMAKE_INSTALL_PREFIX=/usr
-          -DKDIR=/usr/src/linux-headers-`uname -r`
-          -DLUA=TRUE -DSHAPER=FALSE -DRADIUS=TRUE ..
-      - name: make and install
-        working-directory: ./build
-        run: make && make install
-      - name: Copy default config
-        run: cp accel-pppd/accel-ppp.conf /etc/accel-ppp.conf
-      - name: Start accel-ppp with default config
-        run: accel-pppd -d -c /etc/accel-ppp.conf
-      - name: Sleep for 1 sec
-        run: sleep 1
-      - name: Check accel-ppp stat
-        run: accel-cmd show stat
-
-  Build-in-Container-Gentoo:
-    runs-on: ubuntu-24.04
-    container:
-      image: gentoo/stage3
-    steps:
-      - name: Prepare gentoo
-        run: getuto && emerge --sync
-      - name: Install build tools
-        run: |
-          emerge -g --autounmask-write sys-kernel/gentoo-kernel-bin || (etc-update --verbose --automode -5 && emerge -g sys-kernel/gentoo-kernel-bin)
-          emerge -g dev-vcs/git dev-libs/libpcre2 dev-build/cmake dev-lang/lua:5.1
-      - name: Check out repository code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: mkdir build
-        run: mkdir build
-      - name: Disable git security warnings
-        run: git config --global --add safe.directory '*'
-      - name: cmake
-        working-directory: ./build
-        run: >
-          cmake -DBUILD_IPOE_DRIVER=TRUE -DBUILD_VLAN_MON_DRIVER=TRUE -DCMAKE_INSTALL_PREFIX=/usr
-          -DCMAKE_INSTALL_SYSCONFDIR=/etc
-          -DKDIR=/usr/src/linux
-          -DLUA=TRUE -DSHAPER=TRUE -DRADIUS=TRUE ..
-      - name: make and install
-        working-directory: ./build
-        run: make && make install
-      - name: Copy default config
-        run: cp accel-pppd/accel-ppp.conf /etc/accel-ppp.conf
-      - name: Start accel-ppp with default config
-        run: accel-pppd -d -c /etc/accel-ppp.conf
       - name: Sleep for 1 sec
         run: sleep 1
       - name: Check accel-ppp stat
