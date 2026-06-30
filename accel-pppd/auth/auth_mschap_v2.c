@@ -10,6 +10,7 @@
 
 #include <openssl/des.h>
 #include <openssl/evp.h>
+#include <openssl/provider.h>
 
 #include "log.h"
 #include "ppp.h"
@@ -38,6 +39,7 @@ static int conf_max_failure = 3;
 static char *conf_msg_failure = "E=691 R=0 V=3";
 static char *conf_msg_failure2 = "Authentication failure";
 static char *conf_msg_success = "Authentication succeeded";
+static OSSL_PROVIDER *ossl_legacy_provider = NULL;
 
 struct chap_hdr {
 	uint16_t proto;
@@ -109,6 +111,8 @@ static struct auth_data_t* auth_data_init(struct ppp_t *ppp)
 	d->auth.len = 1;
 	d->ppp = ppp;
 
+	ossl_legacy_provider = OSSL_PROVIDER_load(NULL, "legacy");
+
 	return &d->auth;
 }
 
@@ -123,6 +127,9 @@ static void auth_data_free(struct ppp_t *ppp, struct auth_data_t *auth)
 		triton_timer_del(&d->interval);
 
 	_free(d);
+
+	OSSL_PROVIDER_unload(ossl_legacy_provider);
+	ossl_legacy_provider = NULL;
 }
 
 static int chap_start(struct ppp_t *ppp, struct auth_data_t *auth)
