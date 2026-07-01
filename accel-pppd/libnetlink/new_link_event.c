@@ -47,20 +47,15 @@ static int nnle_nlmsg_handler(const struct sockaddr_nl *nladdr,
 	if (tb[IFLA_IFNAME] && strlen(RTA_DATA(tb[IFLA_IFNAME])) < IFNAMSIZ)
 		strncpy(ifname, RTA_DATA(tb[IFLA_IFNAME]), IFNAMSIZ - 1);
 
-	if (hdr->nlmsg_type == RTM_NEWLINK && *(uint32_t *)RTA_DATA(tb[IFLA_OPERSTATE]) == IF_OPER_DOWN) {
-
-		struct ifreq ifr;
-		memset(&ifr, 0, sizeof(ifr));
-		strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
-
-		net->sock_ioctl(SIOCGIFFLAGS, &ifr);
-		if (ifr.ifr_flags) {
-			ifr.ifr_flags |= IFF_UP;
-			net->sock_ioctl(SIOCSIFFLAGS, &ifr);
-		}
-	}
-
-	if (hdr->nlmsg_type == RTM_NEWLINK && *(uint32_t *)RTA_DATA(tb[IFLA_OPERSTATE]) == IF_OPER_UP) {
+	/*
+	  Note: during interface initialization, there are several RTM_NEWLINK messages, so we need to "handle"
+	  The interface is when the system configures it.
+	  A bit hacky way - overall we want to call handlers when there is a new interface, if the operstate
+	  is not DOWN(it could be *UNKNOWN*) and interface info change is UP.
+	  That's how we can handle different interfaces provided by VPP - e.g., LCP tap and LCP bond.
+	 */
+	if (hdr->nlmsg_type == RTM_NEWLINK && (*(uint32_t *)RTA_DATA(tb[IFLA_OPERSTATE]) != IF_OPER_DOWN) &&
+	    (ifi->ifi_flags & ifi->ifi_change) & IFF_UP) {
 		nnle_emit_callbacks(ifname, 1);
 	} else if (hdr->nlmsg_type == RTM_DELLINK) {
 		nnle_emit_callbacks(ifname, 0);
