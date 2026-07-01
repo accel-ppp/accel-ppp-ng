@@ -17,6 +17,9 @@
 #include <sys/resource.h>
 
 #include <openssl/ssl.h>
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#include <openssl/provider.h>
+#endif
 
 #include "triton/triton.h"
 
@@ -40,6 +43,11 @@ static int restart = -1;
 static int term;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+static OSSL_PROVIDER *openssl_provider_default;
+static OSSL_PROVIDER *openssl_provider_legacy;
+#endif
 
 #if OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
 static pthread_mutex_t *ssl_lock_cs;
@@ -77,6 +85,16 @@ static void openssl_init(void)
 	SSL_load_error_strings();
 	OpenSSL_add_all_algorithms();
 	OpenSSL_add_all_digests();
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+	openssl_provider_default = OSSL_PROVIDER_load(NULL, "default");
+	if (!openssl_provider_default)
+		log_error("main: failed to load OpenSSL provider 'default'\n");
+
+	openssl_provider_legacy = OSSL_PROVIDER_load(NULL, "legacy");
+	if (!openssl_provider_legacy)
+		log_error("main: failed to load OpenSSL provider 'legacy'\n");
+#endif
 
 #if OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
 	ssl_lock_init();
@@ -449,6 +467,17 @@ int main(int _argc, char **_argv)
 	pthread_mutex_unlock(&lock);
 
 	triton_terminate();
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+	if (openssl_provider_legacy) {
+		OSSL_PROVIDER_unload(openssl_provider_legacy);
+		openssl_provider_legacy = NULL;
+	}
+	if (openssl_provider_default) {
+		OSSL_PROVIDER_unload(openssl_provider_default);
+		openssl_provider_default = NULL;
+	}
+#endif
 
 	if (restart != -1)
 		__core_restart(restart);
