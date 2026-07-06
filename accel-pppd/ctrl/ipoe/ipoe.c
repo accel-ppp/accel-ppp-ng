@@ -754,6 +754,10 @@ static void ipoe_session_start(struct ipoe_session *ses)
 		return;
 	}
 
+	/* take ownership now so the string is freed by ipoe_session_free()
+	 * even if the session terminates before auth_result() consumes it */
+	ses->username = username;
+
 	ses->ses.unit_idx = ses->serv->ifindex;
 
 	triton_event_fire(EV_CTRL_STARTING, &ses->ses);
@@ -764,9 +768,9 @@ static void ipoe_session_start(struct ipoe_session *ses)
 	if (ses->serv->opt_shared && ipoe_create_interface(ses))
 		return;
 
-	if (conf_noauth)
+	if (conf_noauth) {
 		r = PWDB_SUCCESS;
-	else {
+	} else {
 #ifdef RADIUS
 		if (radius_loaded) {
 			ses->radius.send_access_request = ipoe_rad_send_auth_request;
@@ -783,7 +787,6 @@ static void ipoe_session_start(struct ipoe_session *ses)
 		} else
 			pass = username;
 
-		ses->username = username;
 		r = pwdb_check(&ses->ses, (pwdb_callback)auth_result, ses, username, PPP_PAP, pass);
 
 		if (r == PWDB_WAIT)
@@ -1212,6 +1215,9 @@ static void ipoe_session_free(struct ipoe_session *ses)
 
 	if (ses->l4_redirect_ipset)
 		_free(ses->l4_redirect_ipset);
+
+	if (ses->username)
+		_free(ses->username);
 
 	triton_context_unregister(&ses->ctx);
 
