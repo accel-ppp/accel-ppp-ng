@@ -8,6 +8,12 @@
 #include <sys/mman.h>
 #include <linux/mman.h>
 #include <arpa/inet.h>
+#include <openssl/evp.h>
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#include <openssl/core_names.h>
+#else
+#include <openssl/hmac.h>
+#endif
 
 #include "log.h"
 #include "mempool.h"
@@ -15,6 +21,10 @@
 #include "radius_p.h"
 
 #include "memdebug.h"
+
+#define HMAC_MD5_LEN 16
+/* RADIUS header (20) + Message-Authenticator type+length (2) */
+#define PACKET_SIGNED_OFFSET (20 + 2)
 
 static mempool_t packet_pool;
 static mempool_t attr_pool;
@@ -45,6 +55,45 @@ void print_buf(uint8_t *buf,int size)
 	for(i=0;i<size;i++)
 		printf("%x ",buf[i]);
 	printf("\n");
+}
+
+static int hmac_md5(const uint8_t *key, size_t key_len,
+                    const uint8_t *data, size_t data_len,
+                    uint8_t out[HMAC_MD5_LEN])
+{
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+	EVP_MAC *mac = EVP_MAC_fetch(NULL, "HMAC", NULL);
+	if (!mac)
+		return -1;
+
+	EVP_MAC_CTX *ctx = EVP_MAC_CTX_new(mac);
+	if (!ctx) {
+		EVP_MAC_free(mac);
+		return -1;
+	}
+
+	OSSL_PARAM params[] = {
+		OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST, "MD5", 0),
+		OSSL_PARAM_construct_end()
+	};
+
+	size_t out_len = HMAC_MD5_LEN;
+	int ret = -1;
+
+	if (EVP_MAC_init(ctx, key, key_len, params) == 1 &&
+	    EVP_MAC_update(ctx, data, data_len) == 1 &&
+	    EVP_MAC_final(ctx, out, &out_len, HMAC_MD5_LEN) == 1 &&
+	    out_len == HMAC_MD5_LEN)
+		ret = 0;
+
+	EVP_MAC_CTX_free(ctx);
+	EVP_MAC_free(mac);
+	return ret;
+#else
+	unsigned int len = HMAC_MD5_LEN;
+	return (HMAC(EVP_md5(), key, (int)key_len, data, data_len, out, &len) != NULL &&
+	        len == HMAC_MD5_LEN) ? 0 : -1;
+#endif
 }
 
 int rad_packet_build(struct rad_packet_t *pack, uint8_t *RA)
@@ -306,6 +355,9 @@ void rad_packet_free(struct rad_packet_t *pack)
 	if (pack->buf)
 		mempool_free(pack->buf);
 		//munmap(pack->buf, REQ_LENGTH_MAX);
+
+	if (pack->secret)
+		_free(pack->secret);
 
 	while(!list_empty(&pack->attrs)) {
 		attr = list_entry(pack->attrs.next, typeof(*attr), entry);
@@ -815,6 +867,20 @@ int rad_packet_send(struct rad_packet_t *pack, int fd, struct sockaddr_in *addr)
 	int n;
 
 	clock_gettime(CLOCK_MONOTONIC, &pack->tv);
+
+	if (pack->secret && pack->message_authenticator) {
+		uint8_t hmac[HMAC_MD5_LEN];
+		uint8_t *hmac_ptr = pack->buf + PACKET_SIGNED_OFFSET;
+
+		/* Message-Authenticator must be zeroed while calculating the HMAC (RFC 3579). */
+		memset(hmac_ptr, 0, HMAC_MD5_LEN);
+		if (hmac_md5(pack->secret, strlen((const char *)pack->secret),
+		             pack->buf, pack->len, hmac) < 0) {
+			log_emerg("radius:packet: failed to calculate HMAC\n");
+			return -1;
+		}
+		memcpy(hmac_ptr, hmac, HMAC_MD5_LEN);
+	}
 
 	while (1) {
 		if (addr)

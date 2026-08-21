@@ -109,6 +109,8 @@ struct rad_packet_t
 	struct timespec tv;
 	struct list_head attrs;
 	uint8_t *buf;
+	int message_authenticator;
+	uint8_t *secret;
 };
 
 struct rad_plugin_t
