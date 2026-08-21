@@ -60,6 +60,7 @@ static int conf_strip_realm;
 const char *conf_attr_tunnel_type;
 
 int conf_acct_delay_start;
+int conf_ma_include_access_request;
 
 static LIST_HEAD(sessions);
 static pthread_rwlock_t sessions_lock = PTHREAD_RWLOCK_INITIALIZER;
@@ -1157,6 +1158,9 @@ static int load_config(void)
 		conf_acct_delay_start = atoi(opt);
 	else
 		conf_acct_delay_start = 0;
+
+	opt = conf_get_opt("radius", "message-authenticator-include-access-request");
+	conf_ma_include_access_request = (opt && atoi(opt) > 0) ? 1 : 0;
 
 	return 0;
 }

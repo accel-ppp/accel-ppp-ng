@@ -73,6 +73,19 @@ static struct rad_req_t *__rad_req_alloc(struct radius_pd_t *rpd, int code, cons
 	if (!req->pack)
 		goto out_err;
 
+	if (code == CODE_ACCESS_REQUEST && conf_ma_include_access_request) {
+		uint8_t buf[HMAC_MD5_LEN] = {0};
+		req->pack->message_authenticator = 1;
+		req->pack->secret = (uint8_t *)_strdup(req->serv->secret);
+		if (!req->pack->secret)
+			goto out_err;
+		if (rad_packet_add_octets(req->pack, NULL, "Message-Authenticator", buf, HMAC_MD5_LEN)) {
+			_free(req->pack->secret);
+			req->pack->secret = NULL;
+			goto out_err;
+		}
+	}
+
 	if (code == CODE_ACCOUNTING_REQUEST && rpd->acct_username)
 		username = rpd->acct_username;
 
@@ -368,6 +381,9 @@ int __rad_req_send(struct rad_req_t *req, int async)
 	if (!req->pack->buf && rad_packet_build(req->pack, req->RA))
 		goto out_err;
 
+	if (rad_packet_send(req->pack, req->hnd.fd, NULL))
+		goto out_err;
+
 	if (req->log) {
 		req->log("send ");
 		rad_packet_print(req->pack, req->serv, req->log);
@@ -375,8 +391,6 @@ int __rad_req_send(struct rad_req_t *req, int async)
 
 	if (req->sent)
 		req->sent(req, 0);
-
-	rad_packet_send(req->pack, req->hnd.fd, NULL);
 
 	return 0;
 

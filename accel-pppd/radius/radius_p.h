@@ -4,12 +4,15 @@
 #include <netinet/in.h>
 #include <pthread.h>
 #include <stdarg.h>
+#include <stddef.h>
 
 #include "triton.h"
 #include "radius.h"
 #include "ppp.h"
 #include "ipdb.h"
 #include "pwdb.h"
+
+#define HMAC_MD5_LEN 16
 
 struct rad_server_t;
 
@@ -199,6 +202,7 @@ extern int conf_acct_interim_jitter;
 extern int conf_accounting;
 extern const char *conf_attr_tunnel_type;
 extern int conf_acct_delay_start;
+extern int conf_ma_include_access_request;
 
 int rad_check_nas_pack(struct rad_packet_t *pack);
 struct radius_pd_t *rad_find_session(const char *sessionid, const char *username, const char *port_id, int port, in_addr_t ipaddr, const char *csid);
@@ -239,6 +243,7 @@ int rad_packet_recv(int fd, struct rad_packet_t **, struct sockaddr_in *addr);
 void rad_packet_free(struct rad_packet_t *);
 void rad_packet_print(struct rad_packet_t *pack, struct rad_server_t *s, void (*print)(const char *fmt, ...));
 int rad_packet_send(struct rad_packet_t *pck, int fd, struct sockaddr_in *addr);
+int rad_hmac_md5(const uint8_t *key, size_t key_len, const uint8_t *data, size_t data_len, uint8_t out[HMAC_MD5_LEN]);
 
 void dm_coa_cancel(struct radius_pd_t *pd);
 
