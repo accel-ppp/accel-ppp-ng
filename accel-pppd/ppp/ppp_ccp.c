@@ -665,6 +665,11 @@ static void ccp_recv(struct ppp_handler_t*h)
 		log_ppp_warn("CCP: short packet received\n");
 		return;
 	}
+	if (ntohs(hdr->len) + 2 > ccp->ppp->buf_size) {
+		if (conf_ppp_verbose)
+			log_ppp_warn("CCP: invalid length field, discarding packet\n");
+		return;
+	}
 
 	if ((hdr->code == CONFACK || hdr->code == CONFNAK || hdr->code == CONFREJ) && hdr->id != ccp->fsm.id)
 		return;

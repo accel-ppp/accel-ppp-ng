@@ -497,11 +497,11 @@ static void dhcpv6_send_reply(struct dhcpv6_packet *req, struct dhcpv6_pd *pd, i
 			} 
 			insert_oro(reply, opt, ses);
 
-		} else if (ntohs(opt->hdr->code) == D6_OPTION_RAPID_COMMIT) {
-			if (req->hdr->type == D6_SOLICIT)
-				dhcpv6_option_alloc(reply, D6_OPTION_RAPID_COMMIT, 0);
 		}
 	}
+
+	if (req->hdr->type == D6_SOLICIT && req->rapid_commit)
+		dhcpv6_option_alloc(reply, D6_OPTION_RAPID_COMMIT, 0);
 
 	opt1 = dhcpv6_option_alloc(reply, D6_OPTION_PREFERENCE, 1);
 	*(uint8_t *)opt1->hdr->data = 255;

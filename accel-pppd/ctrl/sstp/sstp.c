@@ -1902,6 +1902,9 @@ static int sstp_handler(struct sstp_conn_t *conn, struct buffer_t *buf)
 		if (n > SSTP_MAX_PACKET_SIZE) {
 			log_ppp_error("recv [SSTP too long packet]\n");
 			return -1;
+		} else if (n < (int)sizeof(*hdr)) {
+			log_ppp_error("recv [SSTP too short packet]\n");
+			return -1;
 		} else if (n > buf->len)
 			break;
 

@@ -32,13 +32,26 @@ static int req_set_RA(struct rad_req_t *req, const char *secret)
 	if (evp_ctx == NULL)
 		return -1;
 
-	if (rad_packet_build(req->pack, req->RA))
+	/* Request Authenticator is MD5 over the packet with the
+	 * authenticator field set to zeros.
+	 */
+	memset(req->RA, 0, sizeof(req->RA));
+
+	if (rad_packet_build(req->pack, req->RA)) {
+		EVP_MD_CTX_free(evp_ctx);
 		return -1;
+	}
 
 	EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
 	EVP_DigestUpdate(evp_ctx, req->pack->buf, req->pack->len);
 	EVP_DigestUpdate(evp_ctx, secret, strlen(secret));
 	EVP_DigestFinal_ex(evp_ctx, req->pack->buf + 4, NULL);
+
+	/* The Response Authenticator from RADIUS server is MD5 hash that includes
+	 * the Request Authenticator. So, saving the computed Request Authenticator 
+	 * in order to validate the server's Accounting-Response later.
+	 */
+	memcpy(req->RA, req->pack->buf + 4, sizeof(req->RA));
 
 	EVP_MD_CTX_free(evp_ctx);
 

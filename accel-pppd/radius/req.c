@@ -444,10 +444,18 @@ int rad_req_read(struct triton_md_handler_t *h)
 
 		rad_server_reply(req->serv);
 
-		if (pack->id == req->pack->id)
-			break;
+		if (pack->id != req->pack->id) {
+			rad_packet_free(pack);
+			continue;
+		}
 
-		rad_packet_free(pack);
+		if (verify_response_authenticator(req, pack)) {
+			log_ppp_warn("radius:packet: invalid response authenticator for id %u from server(%i)\n", pack->id, req->serv->id);
+			rad_packet_free(pack);
+			continue;
+		}
+
+		break;
 	}
 
 	req->reply = pack;

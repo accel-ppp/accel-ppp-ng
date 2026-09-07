@@ -365,6 +365,11 @@ static int req_set_RA(struct rad_req_t *req, const char *secret)
 	if (evp_ctx == NULL)
 		return -1;
 
+	/* RFC 2866: Accounting-Request authenticator is computed with
+	 * 16 zero bytes in the authenticator field before hashing.
+	 */
+	memset(req->RA, 0, sizeof(req->RA));
+
 	if (rad_packet_build(req->pack, req->RA)) {
 		EVP_MD_CTX_free(evp_ctx);
 		return -1;
@@ -374,6 +379,11 @@ static int req_set_RA(struct rad_req_t *req, const char *secret)
 	EVP_DigestUpdate(evp_ctx, req->pack->buf, req->pack->len);
 	EVP_DigestUpdate(evp_ctx, secret, strlen(secret));
 	EVP_DigestFinal_ex(evp_ctx, req->pack->buf + 4, NULL);
+
+	/* Keep req->RA aligned with what is sent on wire so
+	 * response authenticator verification uses the right value.
+	 */
+	memcpy(req->RA, req->pack->buf + 4, sizeof(req->RA));
 
 	EVP_MD_CTX_free(evp_ctx);
 
@@ -394,9 +404,9 @@ static void acct_on_recv(struct rad_req_t *req)
 
 	rad_req_free(req);
 
-	if (req->serv->starting) {
-		req->serv->starting = 0;
-		req->serv->acct_on = 1;
+	if (s->starting) {
+		s->starting = 0;
+		s->acct_on = 1;
 	} else
 		__free_server(s);
 }

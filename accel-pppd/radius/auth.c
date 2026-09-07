@@ -14,6 +14,38 @@
 
 #include "memdebug.h"
 
+int verify_response_authenticator(struct rad_req_t *req, struct rad_packet_t *pack)
+{
+	uint8_t expected[16];
+	EVP_MD_CTX *evp_ctx = NULL;
+	unsigned int expected_len = 0;
+
+	if (!pack || !pack->buf || !req || !req->serv || !req->serv->secret)
+		return -1;
+	if (pack->len < 20)
+		return -1;
+
+	evp_ctx = EVP_MD_CTX_new();
+	if (!evp_ctx) {
+		log_ppp_error("radius: can't create EVP context\n");
+		return -1;
+	}
+
+	/* ResponseAuth = MD5(Code+ID+Length(4) + RequestAuth(16) + Attributes + Secret) */
+	EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
+	EVP_DigestUpdate(evp_ctx, pack->buf, 4);
+	EVP_DigestUpdate(evp_ctx, req->RA, sizeof(req->RA));
+	EVP_DigestUpdate(evp_ctx, pack->buf + 20, pack->len - 20);
+	EVP_DigestUpdate(evp_ctx, req->serv->secret, strlen(req->serv->secret));
+	EVP_DigestFinal_ex(evp_ctx, expected, &expected_len);
+	EVP_MD_CTX_free(evp_ctx);
+
+	if (expected_len != 16)
+		return -1;
+
+	return memcmp(expected, pack->buf + 4, sizeof(expected));
+}
+
 static int decrypt_chap_mppe_keys(struct rad_req_t *req, struct rad_attr_t *attr, const uint8_t *challenge, uint8_t *key)
 {
 	EVP_MD_CTX *evp_ctx = EVP_MD_CTX_new();

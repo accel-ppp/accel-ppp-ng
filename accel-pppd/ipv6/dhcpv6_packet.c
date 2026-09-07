@@ -61,16 +61,73 @@ static struct dict_option known_options[] = {
 	{ 0 }
 };
 
+/* Validation requirements for AFTR-Name option:
+ * 1) option-len > 3 and option-len <= 255
+ * 2) each label must fit within option-len
+ * 3) high order 2 bits of every label must be zero (no compression tags allowed)
+ * 4) domain name must be terminated by a zero-length label
+ * 5) at least one non-zero label must be present
+ */
+static int validate_aftr_name(const uint8_t *data, uint16_t len)
+{
+	uint16_t offset = 0;
+	int nonzero_label_present = 0;
+
+	if (len <= 3 || len > 255) {
+		log_warn("dhcpv6: invalid AFTR-Name option: invalid option length %u\n", len);
+		return 0;
+	}
+
+	while (offset < len) {
+		uint8_t label_len = data[offset++];
+
+		if (label_len == 0) {
+			if (!nonzero_label_present || offset != len) {
+				log_warn("dhcpv6: invalid AFTR-Name option: missing non-zero label "
+					 "and/or invalid termination\n");
+				return 0;
+			}
+			return 1;
+		}
+
+		if (label_len & 0xC0) {
+			log_warn("dhcpv6: invalid AFTR-Name option: compression or reserved bits set\n");
+			return 0;
+		}
+
+		if (offset + label_len > len) {
+			log_warn("dhcpv6: invalid AFTR-Name option: label exceeds total option length\n");
+			return 0;
+		}
+
+		nonzero_label_present = 1;
+		offset += label_len;
+	}
+
+	log_warn("dhcpv6: invalid AFTR-Name option: missing terminating zero-length label\n");
+	return 0;
+}
+
 static void *parse_option(void *ptr, void *endptr, struct list_head *opt_list)
 {
 	struct dict_option *dopt;
 	struct dhcpv6_opt_hdr *opth = ptr;
 	struct dhcpv6_option *opt;
+	uint16_t code;
+	uint16_t len;
 
 	if (ptr + sizeof(*opth) > endptr ||
 	    ptr + sizeof(*opth) + ntohs(opth->len) > endptr) {
 		log_warn("dhcpv6: invalid packet received\n");
 		return NULL;
+	}
+
+	code = ntohs(opth->code);
+	len = ntohs(opth->len);
+
+	if (code == D6_OPTION_AFTR_NAME) {
+		if (!validate_aftr_name(opth->data, len))
+			return NULL;
 	}
 
 	opt = _malloc(sizeof(*opt));
@@ -85,7 +142,7 @@ static void *parse_option(void *ptr, void *endptr, struct list_head *opt_list)
 	list_add_tail(&opt->entry, opt_list);
 
 	for (dopt = known_options; dopt->code; dopt++) {
-		if (dopt->code == ntohs(opth->code))
+		if (dopt->code == code)
 			break;
 	}
 
@@ -109,6 +166,8 @@ struct dhcpv6_packet *dhcpv6_packet_parse(const void *buf, size_t size)
 	struct dhcpv6_opt_hdr *opth;
 	struct dhcpv6_relay *rel;
 	struct dhcpv6_relay_hdr *rhdr;
+	int aftr_name_seen = 0;
+	int relay_depth = 0;
 	void *ptr, *endptr;
 
 	if (size < sizeof(struct dhcpv6_msg_hdr)) {
@@ -133,6 +192,10 @@ struct dhcpv6_packet *dhcpv6_packet_parse(const void *buf, size_t size)
 	endptr = ((void *)pkt->hdr) + size;
 
 	while (pkt->hdr->type == D6_RELAY_FORW) {
+		if (relay_depth++ >= DHCPV6_HOP_COUNT_LIMIT) {
+			log_warn("dhcpv6: relay nesting depth exceeds HOP_COUNT_LIMIT \n");
+			goto error;
+		}
 		rhdr = (struct dhcpv6_relay_hdr *)pkt->hdr;
 		if (((void *)rhdr) + sizeof(*rhdr) > endptr) {
 			log_warn("dhcpv6: invalid packet received\n");
@@ -162,7 +225,7 @@ struct dhcpv6_packet *dhcpv6_packet_parse(const void *buf, size_t size)
 
 			if (opth->code == htons(D6_OPTION_RELAY_MSG)) {
 				pkt->hdr = (struct dhcpv6_msg_hdr *)opth->data;
-				endptr = opth->data + sizeof(*opth) + ntohs(opth->len);
+				endptr = opth->data + ntohs(opth->len);
 			}
 
 			ptr += sizeof(*opth) + ntohs(opth->len);
@@ -182,8 +245,22 @@ struct dhcpv6_packet *dhcpv6_packet_parse(const void *buf, size_t size)
 			pkt->clientid = ptr;
 		else if (opth->code == htons(D6_OPTION_SERVERID))
 			pkt->serverid = ptr;
-		else if (opth->code == htons(D6_OPTION_RAPID_COMMIT))
+		else if (opth->code == htons(D6_OPTION_AFTR_NAME)) {
+			if (aftr_name_seen) {
+				log_warn("dhcpv6: invalid packet (duplicate AFTR-Name options)\n");
+				goto error;
+			}
+
+			aftr_name_seen = 1;
+		}
+		else if (opth->code == htons(D6_OPTION_RAPID_COMMIT)) {
+			if (pkt->rapid_commit) {
+				log_warn("dhcpv6: invalid packet (duplicate Rapid-Commit options)\n");
+				goto error;
+			}
+
 			pkt->rapid_commit = 1;
+		}
 
 		ptr = parse_option(ptr, endptr, &pkt->opt_list);
 		if (!ptr)
@@ -302,6 +379,12 @@ struct dhcpv6_packet *dhcpv6_packet_alloc_reply(struct dhcpv6_packet *req, int t
 
 	while (!list_empty(&req->relay_list)) {
 		rel = list_entry(req->relay_list.next, typeof(*rel), entry);
+		/* Ensure each relay header fits within the reply buffer */
+		if ((char *)pkt->hdr + sizeof(struct dhcpv6_relay_hdr) + sizeof(struct dhcpv6_opt_hdr) >
+		    (char *)(pkt + 1) + BUF_SIZE) {
+			log_warn("dhcpv6: relay layer count exceeds reply buffer capacity\n");
+			goto error;
+		}
 		rel->hdr = (void *)pkt->hdr;
 		pkt->hdr = (void *)rel->hdr + sizeof(struct dhcpv6_relay_hdr) + sizeof(struct dhcpv6_opt_hdr);
 		list_move_tail(&rel->entry, &pkt->relay_list);
@@ -525,20 +608,22 @@ static void print_ipv6addr_array(struct dhcpv6_option *opt, void (*print)(const 
 static void print_status(struct dhcpv6_option *opt, void (*print)(const char *fmt, ...))
 {
 	struct dhcpv6_opt_status *o = (struct dhcpv6_opt_status *)opt->hdr;
-	static char *status_name[] = {
+	static const char *status_name[] = {
 		"Success",
 		"UnspecFail",
 		"NoAddrsAvail",
 		"NoBindings",
 		"NotOnLink",
-		"UseMulticast"
+		"UseMulticast",
 		"NoPrefixAvail"
 	};
+	unsigned int status_code = ntohs(o->code);
+	size_t status_name_count = sizeof(status_name) / sizeof(status_name[0]);
 
-	if (ntohs(o->code) < 0 || ntohs(o->code) > sizeof(status_name))
-		print(" %u", ntohs(o->code));
+	if (status_code >= status_name_count)
+		print(" %u", status_code);
 	else
-		print(" %s", status_name[ntohs(o->code)]);
+		print(" %s", status_name[status_code]);
 }
 
 static void print_reconf(struct dhcpv6_option *opt, void (*print)(const char *fmt, ...))
@@ -554,18 +639,60 @@ static void print_dnssl(struct dhcpv6_option *opt, void (*print)(const char *fmt
 static void print_aftr_gw(struct dhcpv6_option *opt, void (*print)(const char *fmt, ...)) {
 	int len = ntohs(opt->hdr->len);
 	int offset = 0;
+	int dst = 0;
+	int nonzero_label_present = 0;
 	char domain[255];
 	uint8_t label_len;
 
-	memset(domain, 0, 255);
-	while (offset < len) {
-		label_len = opt->hdr->data[offset];
-		if (label_len == 0)
-			break;
-		memcpy(&domain[offset], &opt->hdr->data[offset + 1], label_len);
-		offset += label_len;
-		domain[offset++] = '.';
+	if (len <= 3 || len > 255) {
+		print(" <invalid-aftr-name:invalid-length>");
+		return;
 	}
+
+	memset(domain, 0, sizeof(domain));
+
+	while (offset < len) {
+		label_len = opt->hdr->data[offset++];
+
+		if (label_len == 0) {
+			if (!nonzero_label_present || offset != len) {
+				print(" <invalid-aftr-name:invalid-termination-or-empty>");
+				return;
+			}
+
+			break;
+		}
+
+		if (label_len & 0xC0) {
+			print(" <invalid-aftr-name:invalid-label-high-order-bits>");
+			return;
+		}
+
+		if (offset + label_len > len) {
+			print(" <invalid-aftr-name:label-overrun>");
+			return;
+		}
+
+		if (dst && dst < (int)sizeof(domain) - 1)
+			domain[dst++] = '.';
+
+		if (dst + label_len >= (int)sizeof(domain)) {
+			print(" <invalid-aftr-name:print-buffer-overflow>");
+			return;
+		}
+
+		memcpy(&domain[dst], &opt->hdr->data[offset], label_len);
+		dst += label_len;
+		offset += label_len;
+		nonzero_label_present = 1;
+	}
+
+	if (!nonzero_label_present) {
+		print(" <invalid-aftr-name:missing-nonzero-label>");
+		return;
+	}
+
+	domain[dst] = '\0';
 	print(" %s", domain);
 }
 

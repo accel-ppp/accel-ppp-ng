@@ -70,92 +70,135 @@ static struct ipdb_t ipdb;
 static mempool_t rpd_pool;
 static mempool_t auth_ctx_pool;
 
-static void parse_framed_route(struct radius_pd_t *rpd, const char *attr)
+/* Convert a dotted-quad IPv4 netmask to prefix length.
+ * Returns -1 if the mask bits are not contiguous.
+ */
+static int mask_to_prefix_len(in_addr_t netmask)
 {
-	char str[32];
-	char *ptr;
-	long int prio = 0;
-	in_addr_t dst;
-	in_addr_t gw;
-	int mask;
+	uint32_t m = ntohl(netmask);
+	uint32_t inv = ~m;
+	int plen = 0;
+
+	if ((inv & (inv + 1)) != 0)
+		return -1;
+
+	/* Count leading 1 bits to get prefix length */
+	while (m & 0x80000000u) {
+		++plen;
+		m <<= 1;
+	}
+
+	return plen;
+}
+
+/* Parse a RADIUS Framed-Route string.
+ * Accepted format: "dst[/mask] [gateway] [metric]"
+ * - dst and gateway are IPv4 dotted-quad addresses
+ * - mask is either dotted-quad netmask or prefix length (0..32)
+ * - gateway and metric are optional, metric defaults to 0
+ */
+static int parse_framed_route(const char *str, struct framed_route *fr)
+{
+	const char *ptr;
+	struct in_addr dst;
+	struct in_addr gw;
+	struct in_addr netmask;
+	uint32_t metric;
+	uint32_t plen;
+	size_t len;
+
+	ptr = str + u_parse_spaces(str);
+
+	len = u_parse_ip4addr(ptr, &dst);
+	if (!len)
+		return -1;
+	ptr += len;
+
+	fr->dst = dst.s_addr;
+	fr->mask = 32;
+	fr->gw = 0;
+	fr->prio = 0;
+
+	if (*ptr == '/') {
+		++ptr;
+
+		len = u_parse_ip4addr(ptr, &netmask);
+		if (len) {
+			fr->mask = mask_to_prefix_len(netmask.s_addr);
+			if (fr->mask < 0)
+				return -1;
+			ptr += len;
+		} else {
+			len = u_parse_u32(ptr, &plen);
+			if (!len || plen > 32)
+				return -1;
+			fr->mask = plen;
+			ptr += len;
+		}
+	}
+
+	/* Destination must be a network prefix for the parsed mask. */
+	{
+		uint32_t d = ntohl(fr->dst);
+		uint32_t m = fr->mask ? (0xffffffffu << (32 - fr->mask)) : 0;
+		if ((d & ~m) != 0)
+			return -1;
+	}
+
+	len = u_parse_spaces(ptr);
+	if (!len && *ptr != '\0')
+		return -1;
+	ptr += len;
+
+	if (*ptr == '\0')
+		return 0;
+
+	len = u_parse_ip4addr(ptr, &gw);
+	if (!len)
+		return -1;
+	fr->gw = gw.s_addr;
+	ptr += len;
+
+	len = u_parse_spaces(ptr);
+	if (!len && *ptr != '\0')
+		return -1;
+	ptr += len;
+
+	if (*ptr == '\0')
+		return 0;
+
+	len = u_parse_u32(ptr, &metric);
+	if (!len)
+		return -1;
+	fr->prio = metric;
+	ptr += len;
+
+	if (!u_parse_endstr(ptr))
+		return -1;
+
+	return 0;
+}
+
+static void rad_add_framed_route(const char *str, struct radius_pd_t *rpd)
+{
 	struct framed_route *fr;
 
-	ptr = strchr(attr, '/');
-	if (ptr && ptr - attr > 16)
-		goto out_err;
+	fr = _malloc(sizeof(*fr));
+	if (!fr)
+		goto err;
 
-	if (ptr) {
-		memcpy(str, attr, ptr - attr);
-		str[ptr - attr] = 0;
-	} else {
-		ptr = strchr(attr, ' ');
-		if (ptr) {
-			memcpy(str, attr, ptr - attr);
-			str[ptr - attr] = 0;
-		} else
-			strcpy(str, attr);
-	}
+	if (parse_framed_route(str, fr) < 0)
+		goto err_fr;
 
-	dst = inet_addr(str);
-	if (dst == INADDR_NONE)
-		goto out_err;
-
-	if (ptr) {
-		if (*ptr == '/') {
-			char *ptr2;
-			for (ptr2 = ++ptr; *ptr2 && *ptr2 != '.' && *ptr2 != ' '; ptr2++);
-			if (*ptr2 == '.' && ptr2 - ptr <= 16) {
-				in_addr_t a;
-				memcpy(str, ptr, ptr2 - ptr);
-				str[ptr2 - ptr] = 0;
-				a = ntohl(inet_addr(str));
-				if (a == INADDR_NONE)
-					goto out_err;
-				mask = 33 - htonl(inet_addr(str));
-				if (~((1<<(32 - mask)) - 1) != a)
-					goto out_err;
-			} else if (*ptr2 == ' ' || *ptr2 == 0) {
-				char *ptr3;
-				mask = strtol(ptr, &ptr3, 10);
-				if (mask < 0 || mask > 32 || ptr3 != ptr2)
-					goto out_err;
-			} else
-				goto out_err;
-		} else
-			mask = 32;
-
-		for (++ptr; *ptr && *ptr != ' '; ptr++);
-		if (*ptr == ' ')
-			gw = inet_addr(ptr + 1);
-		else if (*ptr == 0)
-			gw = 0;
-		else
-			goto out_err;
-
-		/* Parse priority, if any */
-		if (*ptr) {
-			for (++ptr; *ptr && *ptr != ' '; ptr++);
-			if (*ptr == ' ')
-				if (u_readlong(&prio, ptr + 1, 0, UINT32_MAX) < 0)
-					goto out_err;
-		}
-	} else {
-		mask = 32;
-		gw = 0;
-	}
-
-	fr = _malloc(sizeof (*fr));
-	fr->dst = dst;
-	fr->mask = mask;
-	fr->gw = gw;
-	fr->prio = prio;
 	fr->next = rpd->fr;
 	rpd->fr = fr;
 
 	return;
 
-out_err:
-	log_ppp_warn("radius: failed to parse Framed-Route=%s\n", attr);
+err_fr:
+	_free(fr);
+err:
+	log_ppp_warn("radius: failed to parse Framed-Route=%s\n", str);
 }
 
 /* Parse a RADIUS Framed-IPv6-Route string.
@@ -315,12 +358,22 @@ int rad_proc_attrs(struct rad_req_t *req)
 			} else if (attr->vendor->id == VENDOR_Accel_PPP) {
 				switch (attr->attr->id) {
 					case Accel_VRF_Name:
-						log_ppp_info2("radius: setting vrf_name to %s\n", attr->val.string);
+						if (attr->len < 0 || attr->len >= IFNAMSIZ) {
+							log_ppp_warn("radius: invalid Accel-VRF-Name length=%d (must be 1..%d or 0 for default VRF), rejecting Access-Accept\n", attr->len, IFNAMSIZ - 1);
+							return -1;
+						}
+
 						if (rpd->ses->vrf_name)
 							_free(rpd->ses->vrf_name);
 						rpd->ses->vrf_name = _malloc(attr->len + 1);
+						if (!rpd->ses->vrf_name) {
+							log_ppp_error("radius: out of memory while setting vrf_name\n");
+							return -1;
+						}
+
 						memcpy(rpd->ses->vrf_name, attr->val.string, attr->len);
 						rpd->ses->vrf_name[attr->len] = 0;
+						log_ppp_info2("radius: setting vrf_name to %s\n", rpd->ses->vrf_name);
 						break;
 				}
 				continue;
@@ -403,7 +456,7 @@ int rad_proc_attrs(struct rad_req_t *req)
 				rpd->ses->ifname_rename[attr->len] = 0;
 				break;
 			case Framed_Route:
-				parse_framed_route(rpd, attr->val.string);
+				rad_add_framed_route(attr->val.string, rpd);
 				break;
 			case Framed_IPv6_Route:
 				rad_add_framed_ipv6_route(attr->val.string, rpd);

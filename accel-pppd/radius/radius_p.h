@@ -215,6 +215,7 @@ void rad_req_free(struct rad_req_t *);
 int rad_req_send(struct rad_req_t *req);
 int __rad_req_send(struct rad_req_t *req, int async);
 int rad_req_read(struct triton_md_handler_t *h);
+int verify_response_authenticator(struct rad_req_t *req, struct rad_packet_t *pack);
 
 struct radius_pd_t *find_pd(struct ap_session *ses);
 int rad_proc_attrs(struct rad_req_t *req);

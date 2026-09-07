@@ -608,7 +608,15 @@ static void lcp_recv_echo_repl(struct ppp_lcp_t *lcp, uint8_t *data, int size)
 static void send_echo_reply(struct ppp_lcp_t *lcp)
 {
 	struct lcp_hdr_t *hdr = (struct lcp_hdr_t*)lcp->ppp->buf;
+	uint16_t reply_len = ntohs(hdr->len);
 	//uint32_t magic = *(uint32_t *)(hdr + 1);
+
+	/* LCP Echo packets must be at least header+magic and must not exceed negotiated MTU. */
+	if (reply_len < PPP_HDRLEN + 4 || reply_len > lcp->ppp->mtu) {
+		if (conf_ppp_verbose)
+			log_ppp_warn("LCP: invalid EchoReq length, discarding\n");
+		return;
+	}
 
 	lcp->echo_sent = 0;
 	lcp->last_echo_ts = _time();
@@ -619,7 +627,7 @@ static void send_echo_reply(struct ppp_lcp_t *lcp)
 	if (conf_ppp_verbose)
 		log_ppp_debug("send [LCP EchoRep id=%x <magic %08x>]\n", hdr->id, lcp->magic);
 
-	ppp_chan_send(lcp->ppp, hdr, min(ntohs(hdr->len), lcp->ppp->mtu) + 2);
+	ppp_chan_send(lcp->ppp, hdr, reply_len + 2);
 }
 
 static void send_echo_request(struct triton_timer_t *t)
@@ -748,6 +756,11 @@ static void lcp_recv(struct ppp_handler_t*h)
 		log_ppp_warn("LCP: short packet received\n");
 		return;
 	}
+	if (ntohs(hdr->len) + 2 > lcp->ppp->buf_size) {
+		if (conf_ppp_verbose)
+			log_ppp_warn("LCP: invalid length field, discarding packet\n");
+		return;
+	}
 
 	if ((hdr->code == CONFACK || hdr->code == CONFNAK || hdr->code == CONFREJ) && hdr->id != lcp->fsm.id)
 		return;
@@ -831,25 +844,55 @@ static void lcp_recv(struct ppp_handler_t*h)
 			ppp_fsm_recv_code_rej_bad(&lcp->fsm);
 			break;
 		case ECHOREQ:
+			/* Echo packets carry a mandatory 4-byte Magic-Number after the LCP header. */
+			if (ntohs(hdr->len) < PPP_HDRLEN + 4) {
+				if (conf_ppp_verbose)
+					log_ppp_warn("LCP: short EchoReq packet, discarding\n");
+				break;
+			}
 			if (conf_ppp_verbose)
 				log_ppp_debug("recv [LCP EchoReq id=%x <magic %08x>]\n", hdr->id, ntohl(*(uint32_t*)(hdr + 1)));
 			send_echo_reply(lcp);
 			break;
 		case ECHOREP:
+			/* Echo packets carry a mandatory 4-byte Magic-Number after the LCP header. */
+			if (ntohs(hdr->len) < PPP_HDRLEN + 4) {
+				if (conf_ppp_verbose)
+					log_ppp_warn("LCP: short EchoRep packet, discarding\n");
+				break;
+			}
 			lcp_recv_echo_repl(lcp, (uint8_t*)(hdr + 1), ntohs(hdr->len) - PPP_HDRLEN);
 			break;
 		case PROTOREJ:
+			/* ProtoRej carries a mandatory 2-byte Rejected-Protocol field after the LCP header. */
+			if (ntohs(hdr->len) < PPP_HDRLEN + 2) {
+				if (conf_ppp_verbose)
+					log_ppp_warn("LCP: short ProtoRej packet, discarding\n");
+				break;
+			}
 			if (conf_ppp_verbose)
 				log_ppp_info2("recv [LCP ProtoRej id=%x <%04x>]\n", hdr->id, ntohs(*(uint16_t*)(hdr + 1)));
 			ppp_recv_proto_rej(lcp->ppp, ntohs(*(uint16_t *)(hdr + 1)));
 			break;
 		case DISCARDREQ:
+			/* DiscardReq carries a mandatory 4-byte Magic-Number after the LCP header. */
+			if (ntohs(hdr->len) < PPP_HDRLEN + 4) {
+				if (conf_ppp_verbose)
+					log_ppp_warn("LCP: short DiscardReq packet, discarding\n");
+				break;
+			}
 			if (conf_ppp_verbose)
 				log_ppp_info2("recv [LCP DiscardReq id=%x <magic %08x>]\n", hdr->id, ntohl(*(uint32_t*)(hdr + 1)));
 			break;
 		case IDENT:
+			/* Ident has a mandatory 4-byte Magic-Number; following remaining bytes are message text. */
+			if (ntohs(hdr->len) < PPP_HDRLEN + 4) {
+				if (conf_ppp_verbose)
+					log_ppp_warn("LCP: short Ident packet, discarding\n");
+				break;
+			}
 			if (conf_ppp_verbose) {
-				term_msg = _strndup((char*)(hdr + 1) + 4, ntohs(hdr->len) - 4 - 4);
+				term_msg = _strndup((char*)(hdr + 1) + 4, ntohs(hdr->len) - PPP_HDRLEN - 4);
 				log_ppp_info2("recv [LCP Ident id=%x <%s>]\n", hdr->id, term_msg);
 				_free(term_msg);
 			}

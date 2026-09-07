@@ -675,6 +675,11 @@ static void ipv6cp_recv(struct ppp_handler_t*h)
 		log_ppp_warn("IPV6CP: short packet received\n");
 		return;
 	}
+	if (ntohs(hdr->len) + 2 > ipv6cp->ppp->buf_size) {
+		if (conf_ppp_verbose)
+			log_ppp_warn("IPV6CP: invalid length field, discarding packet\n");
+		return;
+	}
 
 	if ((hdr->code == CONFACK || hdr->code == CONFNAK || hdr->code == CONFREJ) && hdr->id != ipv6cp->fsm.id)
 		return;

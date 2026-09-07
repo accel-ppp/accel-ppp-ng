@@ -833,13 +833,17 @@ static int add_tag(uint8_t *pack, size_t pack_size, int type, const void *data, 
 static int add_tag2(uint8_t *pack, size_t pack_size, const struct pppoe_tag *t)
 {
 	struct pppoe_hdr *hdr = (struct pppoe_hdr *)(pack + ETH_HLEN);
-	struct pppoe_tag *tag = (struct pppoe_tag *)(pack + ETH_HLEN + sizeof(*hdr) + ntohs(hdr->length));
-	if (pack_size <= ETH_HLEN + sizeof(*hdr) + ntohs(hdr->length) + ntohs(t->tag_len) || ntohs(t->tag_len) < 0)
+	struct pppoe_tag *tag;
+	size_t tag_len = ntohs(t->tag_len);
+	if (pack_size < ETH_HLEN + sizeof(*hdr) + ntohs(hdr->length) + sizeof(struct pppoe_tag) + tag_len) {
+		log_error("pppoe: invalid tag len %zu\n", tag_len);
 		return -1;
+	}
 
-	memcpy(tag, t, sizeof(*t) + ntohs(t->tag_len));
+	tag = (struct pppoe_tag *)(pack + ETH_HLEN + sizeof(*hdr) + ntohs(hdr->length));
+	memcpy(tag, t, sizeof(*t) + tag_len);
 
-	hdr->length = htons(ntohs(hdr->length) + sizeof(*tag) + ntohs(t->tag_len));
+	hdr->length = htons(ntohs(hdr->length) + sizeof(*tag) + tag_len);
 	return 0;
 }
 
@@ -1188,6 +1192,7 @@ static void pppoe_recv_PADR(struct pppoe_serv_t *serv, uint8_t *pack, int size)
 	struct pppoe_tag *ac_cookie_tag = NULL;
 	struct pppoe_tag *service_name_tag = NULL;
 	struct pppoe_tag *tr101_tag = NULL;
+	int service_name_tag_count = 0;
 	int n, service_match = 0;
 	struct pppoe_conn_t *conn;
 	int vendor_id;
@@ -1237,6 +1242,7 @@ static void pppoe_recv_PADR(struct pppoe_serv_t *serv, uint8_t *pack, int size)
 				break;
 			case TAG_SERVICE_NAME:
 				service_name_tag = tag;
+				service_name_tag_count++;
 				if (tag->tag_len == 0)
 					service_match = 1;
 				else if (conf_service_name[0]) {
@@ -1291,6 +1297,13 @@ static void pppoe_recv_PADR(struct pppoe_serv_t *serv, uint8_t *pack, int size)
 	if (check_cookie(serv, ethhdr->h_source, (uint8_t *)ac_cookie_tag->tag_data, relay_sid_tag)) {
 		if (conf_verbose)
 			log_warn("pppoe: discard PADR packet (incorrect AC-Cookie)\n");
+		return;
+	}
+
+	if (service_name_tag_count != 1) {
+		if (conf_verbose)
+			log_warn("pppoe: discard PADR packet (must contain exactly one Service-Name tag, found %d)\n", service_name_tag_count);
+		pppoe_send_err(serv, ethhdr->h_source, host_uniq_tag, relay_sid_tag, CODE_PADS, TAG_SERVICE_NAME_ERROR);
 		return;
 	}
 

@@ -223,9 +223,22 @@ static int def_get_ifindex(const char *ifname)
 {
 	struct kern_net *n = container_of(net, typeof(*n), net);
 	struct ifreq ifr;
+	size_t ifname_len;
+
+	if (!ifname) {
+		log_ppp_error("interface name is NULL\n");
+		return -1;
+	}
+
+	ifname_len = strlen(ifname);
+	if (ifname_len >= IFNAMSIZ) {
+		log_ppp_error("interface name too long (%zu >= %d): '%s'\n", ifname_len, IFNAMSIZ, ifname);
+		return -1;
+	}
 
 	memset(&ifr, 0, sizeof(ifr));
-	strcpy(ifr.ifr_name, ifname);
+	memcpy(ifr.ifr_name, ifname, ifname_len);
+	ifr.ifr_name[ifname_len] = '\0';
 
 	if (ioctl(n->sock, SIOCGIFINDEX, &ifr)) {
 		log_ppp_error("ioctl(SIOCGIFINDEX): %s\n", strerror(errno));
