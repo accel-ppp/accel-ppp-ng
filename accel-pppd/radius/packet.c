@@ -164,13 +164,18 @@ int rad_packet_recv(int fd, struct rad_packet_t **p, struct sockaddr_in *addr)
 	pack->id = *ptr; ptr++;
 	pack->len = ntohs(*(uint16_t*)ptr); ptr += 2;
 
+	if (pack->len < 20) {
+		log_ppp_warn("radius:packet: invalid packet length %i\n", pack->len);
+		goto out_err;
+	}
+
 	if (pack->len > n) {
-		log_ppp_warn("radius:packet: short packet received %i, expected %i\n", pack->len, n);
+		log_ppp_warn("radius:packet: short packet received %i, expected %i\n", n, pack->len);
 		goto out_err;
 	}
 
 	ptr += 16;
-	n -= 20;
+	n = pack->len - 20;
 
 	while (n>0) {
 		id = *ptr; ptr++;
