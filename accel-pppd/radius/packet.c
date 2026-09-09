@@ -19,12 +19,9 @@
 #include "mempool.h"
 
 #include "radius_p.h"
+#include "attr_defs.h"
 
 #include "memdebug.h"
-
-#define HMAC_MD5_LEN 16
-/* RADIUS header (20) + Message-Authenticator type+length (2) */
-#define PACKET_SIGNED_OFFSET (20 + 2)
 
 static mempool_t packet_pool;
 static mempool_t attr_pool;
@@ -57,9 +54,9 @@ void print_buf(uint8_t *buf,int size)
 	printf("\n");
 }
 
-static int hmac_md5(const uint8_t *key, size_t key_len,
-                    const uint8_t *data, size_t data_len,
-                    uint8_t out[HMAC_MD5_LEN])
+int hmac_md5(const uint8_t *key, size_t key_len,
+		     const uint8_t *data, size_t data_len,
+		     uint8_t out[HMAC_MD5_LEN])
 {
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
 	EVP_MAC *mac = EVP_MAC_fetch(NULL, "HMAC", NULL);
@@ -94,6 +91,42 @@ static int hmac_md5(const uint8_t *key, size_t key_len,
 	return (HMAC(EVP_md5(), key, (int)key_len, data, data_len, out, &len) != NULL &&
 	        len == HMAC_MD5_LEN) ? 0 : -1;
 #endif
+}
+
+static uint8_t *locate_message_authenticator_attr(struct rad_packet_t *pack)
+{
+	uint8_t *ptr;
+	uint8_t *ma_attr = NULL;
+	int len;
+
+	if (!pack || !pack->buf || pack->len < 20)
+		return NULL;
+
+	ptr = pack->buf + 20;
+	len = pack->len - 20;
+
+	while (len > 0) {
+		uint8_t attr_len;
+
+		if (len < 2)
+			return NULL;
+
+		attr_len = ptr[1];
+		if (attr_len < 2 || attr_len > len)
+			return NULL;
+
+		if (ptr[0] == Message_Authenticator) {
+			if (attr_len != HMAC_MD5_LEN + 2 || ma_attr)
+				return NULL;
+
+			ma_attr = ptr;
+		}
+
+		ptr += attr_len;
+		len -= attr_len;
+	}
+
+	return ma_attr;
 }
 
 int rad_packet_build(struct rad_packet_t *pack, uint8_t *RA)
@@ -870,7 +903,14 @@ int rad_packet_send(struct rad_packet_t *pack, int fd, struct sockaddr_in *addr)
 
 	if (pack->secret && pack->message_authenticator) {
 		uint8_t hmac[HMAC_MD5_LEN];
-		uint8_t *hmac_ptr = pack->buf + PACKET_SIGNED_OFFSET;
+		uint8_t *ma_attr = locate_message_authenticator_attr(pack);
+		uint8_t *hmac_ptr;
+
+		if (!ma_attr) {
+			log_emerg("radius:packet: Message-Authenticator attribute not found\n");
+			return -1;
+		}
+		hmac_ptr = ma_attr + 2;
 
 		/* Message-Authenticator must be zeroed while calculating the HMAC (RFC 3579). */
 		memset(hmac_ptr, 0, HMAC_MD5_LEN);

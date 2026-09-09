@@ -468,6 +468,12 @@ int rad_req_read(struct triton_md_handler_t *h)
 			continue;
 		}
 
+		if (verify_message_authenticator(req, pack)) {
+			log_ppp_warn("radius:packet: invalid message authenticator for id %u from server(%i)\n", pack->id, req->serv->id);
+			rad_packet_free(pack);
+			continue;
+		}
+
 		break;
 	}
 
