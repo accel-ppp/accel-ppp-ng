@@ -177,9 +177,11 @@ void __export ap_session_activate(struct ap_session *ses)
 		 * Without this, ses->ifindex stays -1 for the life of the
 		 * session: ap_session_read_stats() bails out silently (stuck
 		 * at 0 bytes accounted) and ap_session_timer() treats that as
-		 * fatal, killing the session with TERM_NAS_ERROR every time
-		 * its 60s timer fires - well before any configured
-		 * idle-timeout or session-timeout is reached.
+		 * fatal, calling ap_session_terminate(TERM_NAS_ERROR) the
+		 * first time it runs - on the 60s recurring tick if
+		 * idle_timeout is set, or once at session_timeout otherwise -
+		 * regardless of whether the session is actually idle or has
+		 * reached its configured timeout.
 		 */
 		if (ses->ifindex == -1 && ses->ifname[0])
 			ses->ifindex = net->get_ifindex(ses->ifname);
