@@ -93,16 +93,24 @@ struct rad_server_t *rad_server_get2(int type, in_addr_t addr, int port)
 	return __rad_server_get(type, NULL, addr, port);
 }
 
-void rad_server_put(struct rad_server_t *s, int type)
+struct rad_server_t *rad_server_put(struct rad_server_t *s, int type)
 {
+	int do_close = 0;
+	int do_free = 0;
+
 	__sync_sub_and_fetch(&s->client_cnt[type], 1);
 
 	if ((s->need_free || s->need_close) && !s->client_cnt[0] && !s->client_cnt[1]) {
-		if (s->need_close)
+		if (s->need_close) {
+			do_close = 1;
 			triton_context_call(&s->ctx, (triton_event_func)serv_ctx_close, &s->ctx);
-		else
+		} else {
+			do_free = 1;
 			__free_server(s);
-	}
+		}
+	} 
+
+	return (do_free || do_close) ? NULL : s;
 }
 
 static void req_wakeup(struct rad_req_t *req)
@@ -133,7 +141,20 @@ static void req_wakeup(struct rad_req_t *req)
 	}
 	pthread_mutex_unlock(&req->serv->lock);
 
-	req->send(req, 1);
+	if (req->send(req, 1) == -2) {
+		/* socket setup failed: release the slot taken in
+		 * rad_server_req_exit() and drive the failover path,
+		 * otherwise the server's req_cnt leaks and the request
+		 * is orphaned */
+		req->active = 0;
+		pthread_mutex_lock(&req->serv->lock);
+		req->serv->req_cnt--;
+		pthread_mutex_unlock(&req->serv->lock);
+
+		rad_server_fail(req->serv);
+
+		req->send(req, -1);
+	}
 }
 
 static void req_wakeup_failed(struct rad_req_t *req)
@@ -400,9 +421,10 @@ static void acct_on_sent(struct rad_req_t *req, int res)
 
 static void acct_on_recv(struct rad_req_t *req)
 {
-	struct rad_server_t *s = req->serv;
+	struct rad_server_t *s = rad_req_free(req);
 
-	rad_req_free(req);
+	if (!s)
+		return;
 
 	if (s->starting) {
 		s->starting = 0;
@@ -414,12 +436,15 @@ static void acct_on_recv(struct rad_req_t *req)
 static void acct_on_timeout(struct triton_timer_t *t)
 {
 	struct rad_req_t *req = container_of(t, typeof(*req), timeout);
-	struct rad_server_t *s = req->serv;
 
 	log_switch(triton_context_self(), NULL);
 
 	if (req->try++ == conf_max_try) {
-		rad_req_free(req);
+		struct rad_server_t *s = rad_req_free(req);
+
+		if (!s)
+			return;
+
 		if (s->starting)
 			s->starting = 0;
 		else
@@ -433,6 +458,8 @@ static void acct_on_timeout(struct triton_timer_t *t)
 static void send_acct_on(struct rad_server_t *s)
 {
 	struct rad_req_t *req = rad_req_alloc_empty();
+	if (!req)
+		return;
 
 	log_switch(triton_context_self(), NULL);
 
