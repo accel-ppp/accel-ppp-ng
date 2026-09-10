@@ -73,6 +73,19 @@ static struct rad_req_t *__rad_req_alloc(struct radius_pd_t *rpd, int code, cons
 	if (!req->pack)
 		goto out_err;
 
+	if (code == CODE_ACCESS_REQUEST && conf_blast_protection) {
+		uint8_t buf[16] = {0};
+		req->pack->message_authenticator = 1;
+		req->pack->secret = (uint8_t *)_strdup(req->serv->secret);
+		if (!req->pack->secret)
+			goto out_err;
+		if (rad_packet_add_octets(req->pack, NULL, "Message-Authenticator", buf, 16)) {
+			_free(req->pack->secret);
+			req->pack->secret = NULL;
+			goto out_err;
+		}
+	}
+
 	if (code == CODE_ACCOUNTING_REQUEST && rpd->acct_username)
 		username = rpd->acct_username;
 
@@ -451,6 +464,12 @@ int rad_req_read(struct triton_md_handler_t *h)
 
 		if (verify_response_authenticator(req, pack)) {
 			log_ppp_warn("radius:packet: invalid response authenticator for id %u from server(%i)\n", pack->id, req->serv->id);
+			rad_packet_free(pack);
+			continue;
+		}
+
+		if (verify_message_authenticator(req, pack)) {
+			log_ppp_warn("radius:packet: invalid message authenticator for id %u from server(%i)\n", pack->id, req->serv->id);
 			rad_packet_free(pack);
 			continue;
 		}
