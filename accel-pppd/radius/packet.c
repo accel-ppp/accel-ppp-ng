@@ -177,6 +177,11 @@ int rad_packet_recv(int fd, struct rad_packet_t **p, struct sockaddr_in *addr)
 	n = pack->len - 20;
 
 	while (n>0) {
+		if (n < 2) {
+			log_ppp_warn("radius:packet: truncated attribute header received\n");
+			goto out_err;
+		}
+
 		id = *ptr; ptr++;
 		len = *ptr - 2; ptr++;
 		if (len < 0) {
