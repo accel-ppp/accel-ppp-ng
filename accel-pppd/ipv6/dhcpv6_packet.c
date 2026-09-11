@@ -617,8 +617,13 @@ static void print_status(struct dhcpv6_option *opt, void (*print)(const char *fm
 		"UseMulticast",
 		"NoPrefixAvail"
 	};
-	unsigned int status_code = ntohs(o->code);
+	unsigned int status_code;
 	size_t status_name_count = sizeof(status_name) / sizeof(status_name[0]);
+
+	if (ntohs(opt->hdr->len) < sizeof(o->code))
+		return;
+
+	status_code = ntohs(o->code);
 
 	if (status_code >= status_name_count)
 		print(" %u", status_code);
@@ -704,4 +709,3 @@ static void print_ia_prefix(struct dhcpv6_option *opt, void (*print)(const char 
 	inet_ntop(AF_INET6, &o->prefix, str, sizeof(str));
 	print(" %s/%i pref_lifetime=%i valid_lifetime=%i", str, o->prefix_len, ntohl(o->pref_lifetime), ntohl(o->valid_lifetime));
 }
-
