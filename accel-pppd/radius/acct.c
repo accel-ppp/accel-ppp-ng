@@ -389,6 +389,16 @@ static void rad_acct_stop_sent(struct rad_req_t *req, int res)
 				rpd->acct_req = NULL;
 		} else if (req->rpd)
 			rad_acct_stop_defer(req->rpd);
+		else {
+			/* deferred request: the timeout timer is one-shot and
+			 * nobody else references this request, re-arm it to
+			 * retry later, otherwise the request and its socket
+			 * leak */
+			if (req->timeout.tpd)
+				triton_timer_mod(&req->timeout, 0);
+			else
+				triton_timer_add(NULL, &req->timeout, 0);
+		}
 
 		return;
 	}
@@ -442,17 +452,28 @@ static void rad_acct_stop_timeout(struct triton_timer_t *t)
 			req->pack->id++;
 	}
 
-	if (req->try == conf_max_try) {
+	if (req->try >= conf_max_try) {
+		if (req->rpd)
+			req->rpd->acct_req = NULL;
 		rad_req_free(req);
 		return;
 	}
 
 	if (rad_req_send(req)) {
 		if (ap_shutdown) {
+			if (req->rpd)
+				req->rpd->acct_req = NULL;
 			rad_req_free(req);
 			return;
 		}
-		req->try = 0;
+		/* no server available at the moment; the timeout timer is
+		 * one-shot, re-arm it to retry later, otherwise the request
+		 * and its socket leak; failed attempts count towards
+		 * conf_max_try so the request is freed above eventually */
+		if (req->timeout.tpd)
+			triton_timer_mod(&req->timeout, 0);
+		else
+			triton_timer_add(req->rpd ? req->rpd->ses->ctrl->ctx : NULL, &req->timeout, 0);
 	}
 }
 
@@ -551,7 +572,7 @@ int rad_acct_stop(struct radius_pd_t *rpd)
 	req_set_RA(req, req->serv->secret);
 
 	req->recv = rad_acct_stop_recv;
-	req->timeout.expire = rad_acct_start_timeout;
+	req->timeout.expire = rad_acct_stop_timeout;
 	req->timeout.expire_tv.tv_sec = conf_timeout;
 	req->sent = rad_acct_stop_sent;
 	req->log = conf_verbose ? log_ppp_info1 : NULL;
