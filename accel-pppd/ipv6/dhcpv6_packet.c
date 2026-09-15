@@ -295,7 +295,8 @@ struct dhcpv6_option *dhcpv6_option_alloc(struct dhcpv6_packet *pkt, int code, i
 {
 	struct dhcpv6_option *opt;
 
-	if ((void *)pkt->hdr->data + BUF_SIZE - pkt->endptr < sizeof(struct dhcpv6_opt_hdr) + len)
+	if (len < 0 || len > BUF_SIZE ||
+	    (char *)(pkt + 1) + BUF_SIZE - (char *)pkt->endptr < sizeof(struct dhcpv6_opt_hdr) + (size_t)len)
 		return NULL;
 
 	opt = _malloc(sizeof(*opt));
@@ -322,7 +323,8 @@ struct dhcpv6_option *dhcpv6_nested_option_alloc(struct dhcpv6_packet *pkt, stru
 {
 	struct dhcpv6_option *opt;
 
-	if ((void *)pkt->hdr->data + BUF_SIZE - pkt->endptr < sizeof(struct dhcpv6_opt_hdr) + len)
+	if (len < 0 || len > BUF_SIZE ||
+	    (char *)(pkt + 1) + BUF_SIZE - (char *)pkt->endptr < sizeof(struct dhcpv6_opt_hdr) + (size_t)len)
 		return NULL;
 
 	opt = _malloc(sizeof(*opt));
@@ -368,7 +370,7 @@ void dhcpv6_fill_relay_info(struct dhcpv6_packet *pkt)
 		memcpy(&rhdr->peer_addr, &rel->peer_addr, sizeof(rhdr->peer_addr));
 		opt = (struct dhcpv6_opt_hdr *)rhdr->data;
 		opt->code = htons(D6_OPTION_RELAY_MSG);
-		opt->len = (uint8_t *)pkt->endptr - rhdr->data;
+		opt->len = htons((uint8_t *)pkt->endptr - opt->data);
 	}
 
 	rel = list_entry(pkt->relay_list.next, typeof(*rel), entry);
@@ -396,9 +398,8 @@ struct dhcpv6_packet *dhcpv6_packet_alloc_reply(struct dhcpv6_packet *req, int t
 
 	while (!list_empty(&req->relay_list)) {
 		rel = list_entry(req->relay_list.next, typeof(*rel), entry);
-		/* Ensure each relay header fits within the reply buffer */
-		if ((char *)pkt->hdr + sizeof(struct dhcpv6_relay_hdr) + sizeof(struct dhcpv6_opt_hdr) >
-		    (char *)(pkt + 1) + BUF_SIZE) {
+		if ((char *)(pkt + 1) + BUF_SIZE - (char *)pkt->hdr <
+		    sizeof(struct dhcpv6_relay_hdr) + sizeof(struct dhcpv6_opt_hdr) + sizeof(*pkt->hdr)) {
 			log_warn("dhcpv6: relay layer count exceeds reply buffer capacity\n");
 			goto error;
 		}
