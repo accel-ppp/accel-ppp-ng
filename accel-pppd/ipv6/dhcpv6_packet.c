@@ -166,9 +166,10 @@ struct dhcpv6_packet *dhcpv6_packet_parse(const void *buf, size_t size)
 	struct dhcpv6_opt_hdr *opth;
 	struct dhcpv6_relay *rel;
 	struct dhcpv6_relay_hdr *rhdr;
+	struct dhcpv6_msg_hdr *inner_hdr;
 	int aftr_name_seen = 0;
 	int relay_depth = 0;
-	void *ptr, *endptr;
+	void *ptr, *endptr, *relay_end, *inner_end;
 
 	if (size < sizeof(struct dhcpv6_msg_hdr)) {
 		if (conf_verbose)
@@ -214,22 +215,38 @@ struct dhcpv6_packet *dhcpv6_packet_parse(const void *buf, size_t size)
 
 		list_add_tail(&rel->entry, &pkt->relay_list);
 
+		inner_hdr = NULL;
+		inner_end = NULL;
+		relay_end = endptr;
 		ptr = rhdr->data;
-		while (ptr < endptr) {
+		while (ptr < relay_end) {
 			opth = ptr;
-			if (ptr + sizeof(*opth) > endptr ||
-			    ptr + sizeof(*opth) + ntohs(opth->len) > endptr) {
+			if (ptr + sizeof(*opth) > relay_end ||
+			    ptr + sizeof(*opth) + ntohs(opth->len) > relay_end) {
 				log_warn("dhcpv6: invalid packet received\n");
 				goto error;
 			}
 
 			if (opth->code == htons(D6_OPTION_RELAY_MSG)) {
-				pkt->hdr = (struct dhcpv6_msg_hdr *)opth->data;
-				endptr = opth->data + ntohs(opth->len);
+				if (inner_hdr || ntohs(opth->len) < sizeof(*inner_hdr)) {
+					log_warn("dhcpv6: invalid packet received\n");
+					goto error;
+				}
+
+				inner_hdr = (struct dhcpv6_msg_hdr *)opth->data;
+				inner_end = opth->data + ntohs(opth->len);
 			}
 
 			ptr += sizeof(*opth) + ntohs(opth->len);
 		}
+
+		if (!inner_hdr) {
+			log_warn("dhcpv6: invalid packet received\n");
+			goto error;
+		}
+
+		pkt->hdr = inner_hdr;
+		endptr = inner_end;
 	}
 
 	ptr = pkt->hdr->data;
@@ -278,7 +295,8 @@ struct dhcpv6_option *dhcpv6_option_alloc(struct dhcpv6_packet *pkt, int code, i
 {
 	struct dhcpv6_option *opt;
 
-	if ((void *)pkt->hdr->data + BUF_SIZE - pkt->endptr < sizeof(struct dhcpv6_opt_hdr) + len)
+	if (len < 0 || len > BUF_SIZE ||
+	    (char *)(pkt + 1) + BUF_SIZE - (char *)pkt->endptr < sizeof(struct dhcpv6_opt_hdr) + (size_t)len)
 		return NULL;
 
 	opt = _malloc(sizeof(*opt));
@@ -305,7 +323,8 @@ struct dhcpv6_option *dhcpv6_nested_option_alloc(struct dhcpv6_packet *pkt, stru
 {
 	struct dhcpv6_option *opt;
 
-	if ((void *)pkt->hdr->data + BUF_SIZE - pkt->endptr < sizeof(struct dhcpv6_opt_hdr) + len)
+	if (len < 0 || len > BUF_SIZE ||
+	    (char *)(pkt + 1) + BUF_SIZE - (char *)pkt->endptr < sizeof(struct dhcpv6_opt_hdr) + (size_t)len)
 		return NULL;
 
 	opt = _malloc(sizeof(*opt));
@@ -351,7 +370,7 @@ void dhcpv6_fill_relay_info(struct dhcpv6_packet *pkt)
 		memcpy(&rhdr->peer_addr, &rel->peer_addr, sizeof(rhdr->peer_addr));
 		opt = (struct dhcpv6_opt_hdr *)rhdr->data;
 		opt->code = htons(D6_OPTION_RELAY_MSG);
-		opt->len = (uint8_t *)pkt->endptr - rhdr->data;
+		opt->len = htons((uint8_t *)pkt->endptr - opt->data);
 	}
 
 	rel = list_entry(pkt->relay_list.next, typeof(*rel), entry);
@@ -379,9 +398,8 @@ struct dhcpv6_packet *dhcpv6_packet_alloc_reply(struct dhcpv6_packet *req, int t
 
 	while (!list_empty(&req->relay_list)) {
 		rel = list_entry(req->relay_list.next, typeof(*rel), entry);
-		/* Ensure each relay header fits within the reply buffer */
-		if ((char *)pkt->hdr + sizeof(struct dhcpv6_relay_hdr) + sizeof(struct dhcpv6_opt_hdr) >
-		    (char *)(pkt + 1) + BUF_SIZE) {
+		if ((char *)(pkt + 1) + BUF_SIZE - (char *)pkt->hdr <
+		    sizeof(struct dhcpv6_relay_hdr) + sizeof(struct dhcpv6_opt_hdr) + sizeof(*pkt->hdr)) {
 			log_warn("dhcpv6: relay layer count exceeds reply buffer capacity\n");
 			goto error;
 		}
@@ -617,8 +635,13 @@ static void print_status(struct dhcpv6_option *opt, void (*print)(const char *fm
 		"UseMulticast",
 		"NoPrefixAvail"
 	};
-	unsigned int status_code = ntohs(o->code);
+	unsigned int status_code;
 	size_t status_name_count = sizeof(status_name) / sizeof(status_name[0]);
+
+	if (ntohs(opt->hdr->len) < sizeof(o->code))
+		return;
+
+	status_code = ntohs(o->code);
 
 	if (status_code >= status_name_count)
 		print(" %u", status_code);
@@ -704,4 +727,3 @@ static void print_ia_prefix(struct dhcpv6_option *opt, void (*print)(const char 
 	inet_ntop(AF_INET6, &o->prefix, str, sizeof(str));
 	print(" %s/%i pref_lifetime=%i valid_lifetime=%i", str, o->prefix_len, ntohl(o->pref_lifetime), ntohl(o->valid_lifetime));
 }
-
