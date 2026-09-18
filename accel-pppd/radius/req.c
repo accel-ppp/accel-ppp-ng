@@ -389,6 +389,9 @@ int __rad_req_send(struct rad_req_t *req, int async)
 		rad_packet_print(req->pack, req->serv, req->log);
 	}
 
+	if (rad_packet_send(req->pack, req->hnd.fd, NULL))
+		goto out_err;
+
 	if (req->sent)
 		req->sent(req, 0);
 
