@@ -1013,6 +1013,11 @@ Specifies should accel-ppp generate and send Acct-Session-Id on Access-Request p
 .TP
 .BI "nas-port-id-in-req=" 0|1
 Specifies should accel-ppp send NAS-Port-Id on Access-Request and Accounting-Request packets (default 1).
+.TP
+.BI "blast-protection=" 0|1
+If this option is given and
+.B 1
+is specified then radius module will include Message-Authenticator attribute in Access-Request packets.
 .SH [log]
 .br
 Configuration of log and log_file modules.
