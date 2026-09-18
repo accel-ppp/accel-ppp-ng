@@ -18,6 +18,31 @@
 static int make_socket(struct rad_req_t *req);
 static mempool_t req_pool;
 
+static int refresh_packet_secret(struct rad_req_t *req)
+{
+	uint8_t *secret;
+
+	if (!req->pack || !req->pack->message_authenticator)
+		return 0;
+
+	if (!req->serv || !req->serv->secret)
+		return -1;
+
+	if (req->pack->secret && !strcmp((const char *)req->pack->secret, req->serv->secret))
+		return 0;
+
+	secret = (uint8_t *)_strdup(req->serv->secret);
+	if (!secret)
+		return -1;
+
+	if (req->pack->secret)
+		_free(req->pack->secret);
+
+	req->pack->secret = secret;
+
+	return 0;
+}
+
 static struct rad_req_t *__rad_req_alloc(struct radius_pd_t *rpd, int code, const char *username, in_addr_t addr, int port, int prio)
 {
 	struct rad_plugin_t *plugin;
@@ -381,6 +406,9 @@ int __rad_req_send(struct rad_req_t *req, int async)
 	if (!req->pack->buf && rad_packet_build(req->pack, req->RA))
 		goto out_err;
 
+	if (refresh_packet_secret(req))
+		goto out_err;
+
 	if (rad_packet_send(req->pack, req->hnd.fd, NULL))
 		goto out_err;
 
@@ -388,9 +416,6 @@ int __rad_req_send(struct rad_req_t *req, int async)
 		req->log("send ");
 		rad_packet_print(req->pack, req->serv, req->log);
 	}
-
-	if (rad_packet_send(req->pack, req->hnd.fd, NULL))
-		goto out_err;
 
 	if (req->sent)
 		req->sent(req, 0);
