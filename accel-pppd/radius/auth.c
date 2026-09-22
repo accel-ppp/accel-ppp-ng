@@ -39,13 +39,13 @@ static struct rad_attr_t *find_message_authenticator(struct rad_packet_t *pack, 
 
 int verify_response_authenticator(struct rad_req_t *req, struct rad_packet_t *pack)
 {
-	uint8_t expected[16];
+	uint8_t expected[HMAC_MD5_LEN];
 	EVP_MD_CTX *evp_ctx = NULL;
 	unsigned int expected_len = 0;
 
 	if (!pack || !pack->buf || !req || !req->serv || !req->serv->secret)
 		return -1;
-	if (pack->len < 20)
+	if (pack->len < RADIUS_HEADER_LEN)
 		return -1;
 
 	evp_ctx = EVP_MD_CTX_new();
@@ -56,17 +56,17 @@ int verify_response_authenticator(struct rad_req_t *req, struct rad_packet_t *pa
 
 	/* ResponseAuth = MD5(Code+ID+Length(4) + RequestAuth(16) + Attributes + Secret) */
 	EVP_DigestInit_ex(evp_ctx, EVP_md5(), NULL);
-	EVP_DigestUpdate(evp_ctx, pack->buf, 4);
+	EVP_DigestUpdate(evp_ctx, pack->buf, RADIUS_AUTHENTICATOR_OFFSET);
 	EVP_DigestUpdate(evp_ctx, req->RA, sizeof(req->RA));
-	EVP_DigestUpdate(evp_ctx, pack->buf + 20, pack->len - 20);
+	EVP_DigestUpdate(evp_ctx, pack->buf + RADIUS_HEADER_LEN, pack->len - RADIUS_HEADER_LEN);
 	EVP_DigestUpdate(evp_ctx, req->serv->secret, strlen(req->serv->secret));
 	EVP_DigestFinal_ex(evp_ctx, expected, &expected_len);
 	EVP_MD_CTX_free(evp_ctx);
 
-	if (expected_len != 16)
+	if (expected_len != HMAC_MD5_LEN)
 		return -1;
 
-	return memcmp(expected, pack->buf + 4, sizeof(expected));
+	return CRYPTO_memcmp(expected, pack->buf + RADIUS_AUTHENTICATOR_OFFSET, sizeof(expected));
 }
 
 int verify_message_authenticator(struct rad_req_t *req, struct rad_packet_t *pack)
