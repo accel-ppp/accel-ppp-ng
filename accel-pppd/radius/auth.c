@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <openssl/crypto.h>
 #include <openssl/evp.h>
 
 #include "triton.h"
@@ -13,6 +14,28 @@
 #include "attr_defs.h"
 
 #include "memdebug.h"
+
+static struct rad_attr_t *find_message_authenticator(struct rad_packet_t *pack, int *duplicate)
+{
+	struct rad_attr_t *attr;
+	struct rad_attr_t *ma_attr = NULL;
+
+	*duplicate = 0;
+
+	list_for_each_entry(attr, &pack->attrs, entry) {
+		if (attr->vendor || strcmp(attr->attr->name, "Message-Authenticator"))
+			continue;
+
+		if (ma_attr) {
+			*duplicate = 1;
+			return NULL;
+		}
+
+		ma_attr = attr;
+	}
+
+	return ma_attr;
+}
 
 int verify_response_authenticator(struct rad_req_t *req, struct rad_packet_t *pack)
 {
@@ -44,6 +67,67 @@ int verify_response_authenticator(struct rad_req_t *req, struct rad_packet_t *pa
 		return -1;
 
 	return memcmp(expected, pack->buf + 4, sizeof(expected));
+}
+
+int verify_message_authenticator(struct rad_req_t *req, struct rad_packet_t *pack)
+{
+	struct rad_attr_t *ma_attr;
+	uint8_t expected[HMAC_MD5_LEN];
+	uint8_t resp_auth[HMAC_MD5_LEN];
+	uint8_t recv_ma[HMAC_MD5_LEN];
+	uint8_t *ma_ptr;
+	const uint8_t *secret;
+	int duplicate;
+	int ret;
+
+	if (!req || !pack)
+		return -1;
+
+	if (pack->code != CODE_ACCESS_ACCEPT && pack->code != CODE_ACCESS_REJECT &&
+	    pack->code != CODE_ACCESS_CHALLENGE)
+		return 0;
+
+	ma_attr = find_message_authenticator(pack, &duplicate);
+	if (duplicate)
+		return -1;
+
+	if (!ma_attr) {
+		if (conf_ma_require_access_response)
+			return -1;
+
+		/* Some RADIUS servers still omit Message-Authenticator in Access responses.
+		 * Treat absence as compatible and rely on Response Authenticator validation.
+		 */
+		return 0;
+	}
+
+	if (req->pack && req->pack->secret)
+		secret = req->pack->secret;
+	else if (req->serv && req->serv->secret)
+		secret = (const uint8_t *)req->serv->secret;
+	else
+		return -1;
+
+	if (!pack->buf || pack->len < RADIUS_HEADER_LEN || ma_attr->len != HMAC_MD5_LEN || !ma_attr->raw)
+		return -1;
+
+	ma_ptr = (uint8_t *)ma_attr->raw;
+	memcpy(resp_auth, pack->buf + RADIUS_AUTHENTICATOR_OFFSET, sizeof(resp_auth));
+	memcpy(recv_ma, ma_ptr, sizeof(recv_ma));
+
+	/* Verify Message-Authenticator over the response packet with the original
+	 * request authenticator in the header and the MA attribute value zeroed.
+	 */
+	memcpy(pack->buf + RADIUS_AUTHENTICATOR_OFFSET, req->RA, sizeof(req->RA));
+	memset(ma_ptr, 0, HMAC_MD5_LEN);
+	ret = rad_hmac_md5(secret, strlen((const char *)secret), pack->buf, pack->len, expected);
+	memcpy(ma_ptr, recv_ma, sizeof(recv_ma));
+	memcpy(pack->buf + RADIUS_AUTHENTICATOR_OFFSET, resp_auth, sizeof(resp_auth));
+
+	if (ret < 0)
+		return -1;
+
+	return CRYPTO_memcmp(expected, recv_ma, sizeof(expected));
 }
 
 static int decrypt_chap_mppe_keys(struct rad_req_t *req, struct rad_attr_t *attr, const uint8_t *challenge, uint8_t *key)

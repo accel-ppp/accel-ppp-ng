@@ -13,6 +13,8 @@
 #include "pwdb.h"
 
 #define HMAC_MD5_LEN 16
+#define RADIUS_AUTHENTICATOR_OFFSET 4
+#define RADIUS_HEADER_LEN 20
 
 struct rad_server_t;
 
@@ -203,6 +205,7 @@ extern int conf_accounting;
 extern const char *conf_attr_tunnel_type;
 extern int conf_acct_delay_start;
 extern int conf_ma_include_access_request;
+extern int conf_ma_require_access_response;
 
 int rad_check_nas_pack(struct rad_packet_t *pack);
 struct radius_pd_t *rad_find_session(const char *sessionid, const char *username, const char *port_id, int port, in_addr_t ipaddr, const char *csid);
@@ -220,6 +223,7 @@ int rad_req_send(struct rad_req_t *req);
 int __rad_req_send(struct rad_req_t *req, int async);
 int rad_req_read(struct triton_md_handler_t *h);
 int verify_response_authenticator(struct rad_req_t *req, struct rad_packet_t *pack);
+int verify_message_authenticator(struct rad_req_t *req, struct rad_packet_t *pack);
 
 struct radius_pd_t *find_pd(struct ap_session *ses);
 int rad_proc_attrs(struct rad_req_t *req);
