@@ -18,6 +18,31 @@
 static int make_socket(struct rad_req_t *req);
 static mempool_t req_pool;
 
+static int refresh_packet_secret(struct rad_req_t *req)
+{
+	uint8_t *secret;
+
+	if (!req->pack || !req->pack->message_authenticator)
+		return 0;
+
+	if (!req->serv || !req->serv->secret)
+		return -1;
+
+	if (req->pack->secret && !strcmp((const char *)req->pack->secret, req->serv->secret))
+		return 0;
+
+	secret = (uint8_t *)_strdup(req->serv->secret);
+	if (!secret)
+		return -1;
+
+	if (req->pack->secret)
+		_free(req->pack->secret);
+
+	req->pack->secret = secret;
+
+	return 0;
+}
+
 static struct rad_req_t *__rad_req_alloc(struct radius_pd_t *rpd, int code, const char *username, in_addr_t addr, int port, int prio)
 {
 	struct rad_plugin_t *plugin;
@@ -72,6 +97,19 @@ static struct rad_req_t *__rad_req_alloc(struct radius_pd_t *rpd, int code, cons
 	req->pack = rad_packet_alloc(code);
 	if (!req->pack)
 		goto out_err;
+
+	if (code == CODE_ACCESS_REQUEST && conf_ma_include_access_request) {
+		uint8_t buf[HMAC_MD5_LEN] = {0};
+		req->pack->message_authenticator = 1;
+		req->pack->secret = (uint8_t *)_strdup(req->serv->secret);
+		if (!req->pack->secret)
+			goto out_err;
+		if (rad_packet_add_octets(req->pack, NULL, "Message-Authenticator", buf, HMAC_MD5_LEN)) {
+			_free(req->pack->secret);
+			req->pack->secret = NULL;
+			goto out_err;
+		}
+	}
 
 	if (code == CODE_ACCOUNTING_REQUEST && rpd->acct_username)
 		username = rpd->acct_username;
@@ -368,6 +406,12 @@ int __rad_req_send(struct rad_req_t *req, int async)
 	if (!req->pack->buf && rad_packet_build(req->pack, req->RA))
 		goto out_err;
 
+	if (refresh_packet_secret(req))
+		goto out_err;
+
+	if (rad_packet_send(req->pack, req->hnd.fd, NULL))
+		goto out_err;
+
 	if (req->log) {
 		req->log("send ");
 		rad_packet_print(req->pack, req->serv, req->log);
@@ -375,8 +419,6 @@ int __rad_req_send(struct rad_req_t *req, int async)
 
 	if (req->sent)
 		req->sent(req, 0);
-
-	rad_packet_send(req->pack, req->hnd.fd, NULL);
 
 	return 0;
 
@@ -455,6 +497,12 @@ int rad_req_read(struct triton_md_handler_t *h)
 
 		if (verify_response_authenticator(req, pack)) {
 			log_ppp_warn("radius:packet: invalid response authenticator for id %u from server(%i)\n", pack->id, req->serv->id);
+			rad_packet_free(pack);
+			continue;
+		}
+
+		if (verify_message_authenticator(req, pack)) {
+			log_ppp_warn("radius:packet: invalid message authenticator for id %u from server(%i)\n", pack->id, req->serv->id);
 			rad_packet_free(pack);
 			continue;
 		}
