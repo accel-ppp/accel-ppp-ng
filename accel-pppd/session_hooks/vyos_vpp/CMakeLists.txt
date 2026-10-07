@@ -5,12 +5,13 @@ SET(sources
 	vppiputils.c
 	vpppoe.c
 	vpppolicer.c
+	vppstats.c
 	vpputils.c
 )
 
 ADD_LIBRARY(vyos_vpp SHARED ${sources})
 
-TARGET_LINK_LIBRARIES(vyos_vpp vapiclient vlibapi vlib)
+TARGET_LINK_LIBRARIES(vyos_vpp vapiclient vppapiclient vppinfra vlibapi vlib)
 set_property(TARGET vyos_vpp PROPERTY CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
 set_property(TARGET vyos_vpp PROPERTY INSTALL_RPATH ${CMAKE_INSTALL_PREFIX}/lib${LIB_SUFFIX}/accel-ppp)
 

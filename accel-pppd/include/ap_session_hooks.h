@@ -12,6 +12,7 @@
 #include "list.h"
 
 struct ap_session;
+struct rtnl_link_stats64;
 /*
  * Hooks are presented mostly for VPP and are designed
  * to present the VPP routine as a separate plugin.
@@ -49,6 +50,14 @@ struct ap_session_hooks_t {
 	/* limiter related, check shaper/limiter.c */
 	int (*install_limiter)(struct ap_session *ses, int down_speed, int down_burst, int up_speed, int up_burst);
 	int (*remove_limiter)(struct ap_session *ses);
+
+	/*
+	 * read the session interface counters (rx/tx packets and bytes)
+	 * for interfaces that are not visible to the kernel (netlink),
+	 * called instead of iplink_get_stats() by session.c
+	 * 0 - OK, other - failed to read stats
+	 */
+	int (*read_stats)(struct ap_session *ses, struct rtnl_link_stats64 *stats);
 
 	/* flags */
 	uint8_t is_non_dev_ppp:1; /* do not create the ppp device with /dev/ppp */
