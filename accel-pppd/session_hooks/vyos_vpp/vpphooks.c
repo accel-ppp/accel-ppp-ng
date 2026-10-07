@@ -20,6 +20,7 @@
 #include "vppiputils.h"
 #include "vpppolicer.h"
 #include "vpppoe.h"
+#include "vppstats.h"
 
 #include "vpphooks.h"
 
@@ -213,6 +214,8 @@ struct ap_session_hooks_t vpp_hooks = {
 
 	.install_limiter = vpppolicer_install_limiter,
 	.remove_limiter = vpppolicer_remove_limiter,
+
+	.read_stats = vppstats_read_stats,
 
 	.is_non_dev_ppp = 1,
 	.is_non_socket_dhcpv6_nd = 1
