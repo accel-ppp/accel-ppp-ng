@@ -55,7 +55,10 @@ struct ap_session_hooks_t {
 	 * read the session interface counters (rx/tx packets and bytes)
 	 * for interfaces that are not visible to the kernel (netlink),
 	 * called instead of iplink_get_stats() by session.c
-	 * 0 - OK, other - failed to read stats
+	 * 0 - OK
+	 * -EAGAIN - temporarily unavailable, the session is not lost and must
+	 *           not be terminated, the last known values are reported
+	 * other - the counters of the session are gone
 	 */
 	int (*read_stats)(struct ap_session *ses, struct rtnl_link_stats64 *stats);
 

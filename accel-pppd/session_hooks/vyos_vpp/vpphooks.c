@@ -82,6 +82,7 @@ int vpphook_pppoe_create_vpp_session_interface(struct ap_session *ses)
 	}
 
 	vpphook_get_pd(ses)->vpp_sw_if_index = ifindex;
+	vppstats_session_created(ses);
 	vpppoe_dump_interface_name(ifindex, ses->ifname, AP_IFNAME_LEN);
 
 	if (ses->ipv4) {
@@ -102,6 +103,9 @@ int vpphook_pppoe_terminate(struct ap_session *ses, int hard)
 	int ret = 0;
 
 	pppoe_get_session_mac_and_sid(ses, &mac, &sid);
+
+	/* the last counters must be read while the interface still exists */
+	vppstats_session_freeze(ses);
 
 	ret = vpp_iproute_flush(ses);
 	if (ret)

@@ -159,8 +159,12 @@ static void ap_session_timer(struct triton_timer_t *t)
 {
 	struct timespec ts;
 	struct ap_session *ses = container_of(t, typeof(*ses), timer);
+	int ret;
 
-	if (ap_session_read_stats(ses, NULL))
+	ret = ap_session_read_stats(ses, NULL);
+
+	/* -EAGAIN: counters are only temporarily unavailable, the session is fine */
+	if (ret && ret != -EAGAIN)
 		ap_session_terminate(ses, TERM_NAS_ERROR, 0);
 
 	clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -443,6 +447,7 @@ static void generate_sessionid(struct ap_session *ses)
 int __export ap_session_read_stats(struct ap_session *ses, struct rtnl_link_stats64 *stats)
 {
 	struct rtnl_link_stats64 lstats;
+	int ret;
 
 #ifdef HAVE_SESSION_HOOKS
 	if (ses->ifindex == -1 && !ap_session_has_hook_stats(ses))
@@ -455,7 +460,16 @@ int __export ap_session_read_stats(struct ap_session *ses, struct rtnl_link_stat
 	if (!stats)
 		stats = &lstats;
 
-	if (ap_session_get_stats(ses, stats)) {
+	ret = ap_session_get_stats(ses, stats);
+	if (ret == -EAGAIN) {
+		/* temporarily unavailable, report the last known values */
+		stats->rx_packets = ses->acct_rx_packets;
+		stats->tx_packets = ses->acct_tx_packets;
+		stats->rx_bytes = ses->acct_rx_bytes;
+		stats->tx_bytes = ses->acct_tx_bytes;
+		return -EAGAIN;
+	}
+	if (ret) {
 		log_ppp_warn("failed to get interface statistics\n");
 		return -1;
 	}
