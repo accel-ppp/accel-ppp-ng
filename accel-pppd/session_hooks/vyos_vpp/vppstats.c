@@ -284,12 +284,6 @@ again:
 	return 0;
 }
 
-static uint64_t sub_clamp(uint64_t a, uint64_t b)
-{
-	/* never wrap around, the counters of a reused index can be lower than the base */
-	return a >= b ? a - b : 0;
-}
-
 /* the cache may serve this session: dumped after its interface was created, recent enough, and it has the index */
 static int snapshot_serves(const struct vppstats_session *s, uint32_t idx)
 {
@@ -328,12 +322,29 @@ static int session_fresh_read(struct vpphook_private_data_t *pd, int new_session
 	return 0;
 }
 
-static void session_update_last(struct vppstats_session *s, const struct vppstats_counts *raw)
+/*
+ * A counter that is below the previous one was reset or belongs to another
+ * interface that got the same index. Which of both cannot be told here, so the
+ * session is not accounted any more and last stays what it was. It is not
+ * clamped to zero, that would make the totals of the session go down.
+ * 0 - OK, -ENODEV - the counters are no longer those of the session
+ */
+static int session_update_last(struct ap_session *ses, struct vppstats_session *s, const struct vppstats_counts *raw)
 {
-	s->last.rx_packets = sub_clamp(raw->rx_packets, s->base.rx_packets);
-	s->last.rx_bytes = sub_clamp(raw->rx_bytes, s->base.rx_bytes);
-	s->last.tx_packets = sub_clamp(raw->tx_packets, s->base.tx_packets);
-	s->last.tx_bytes = sub_clamp(raw->tx_bytes, s->base.tx_bytes);
+	if (raw->rx_packets < s->prev.rx_packets || raw->rx_bytes < s->prev.rx_bytes ||
+	    raw->tx_packets < s->prev.tx_packets || raw->tx_bytes < s->prev.tx_bytes) {
+		s->lost = 1;
+		log_warn("vpp: %s: the counters went backwards, the interface was reset or its index reused, the session keeps its last good values\n",
+			 ses->ifname);
+		return -ENODEV;
+	}
+
+	s->prev = *raw;
+	s->last.rx_packets = raw->rx_packets - s->base.rx_packets;
+	s->last.rx_bytes = raw->rx_bytes - s->base.rx_bytes;
+	s->last.tx_packets = raw->tx_packets - s->base.tx_packets;
+	s->last.tx_bytes = raw->tx_bytes - s->base.tx_bytes;
+	return 0;
 }
 
 void vppstats_session_created(struct ap_session *ses)
@@ -372,6 +383,7 @@ static int session_take_baseline(struct vpphook_private_data_t *pd)
 		ret = session_fresh_read(pd, 1, &raw);
 	if (!ret) {
 		s->base = raw;
+		s->prev = raw;
 		s->inst_gen = inst_gen;
 		s->base_valid = 1;
 	}
@@ -420,7 +432,7 @@ int vppstats_read_stats(struct ap_session *ses, struct rtnl_link_stats64 *stats)
 		goto out;
 	}
 
-	if (s->base_valid && s->inst_gen != inst_gen) {
+	if (s->lost || (s->base_valid && s->inst_gen != inst_gen)) {
 		ret = -ENODEV;
 		goto out;
 	}
@@ -448,9 +460,10 @@ int vppstats_read_stats(struct ap_session *ses, struct rtnl_link_stats64 *stats)
 		goto out;
 	}
 
-	session_update_last(s, &raw);
+	ret = session_update_last(ses, s, &raw);
+	if (ret)
+		goto out;
 	counts_to_stats(&s->last, stats);
-	ret = 0;
 out:
 	pthread_mutex_unlock(&lock);
 	return ret;
@@ -477,9 +490,9 @@ void vppstats_session_freeze(struct ap_session *ses)
 	 * there is when the instance is gone. From here on the VPP interface
 	 * and its index must not be read for this session again.
 	 */
-	if (s->base_valid && s->inst_gen == inst_gen && pd->vpp_sw_if_index &&
+	if (s->base_valid && !s->lost && s->inst_gen == inst_gen && pd->vpp_sw_if_index &&
 	    !session_fresh_read(pd, 0, &raw) && s->inst_gen == inst_gen)
-		session_update_last(s, &raw);
+		session_update_last(ses, s, &raw);
 
 	s->frozen = 1;
 out:

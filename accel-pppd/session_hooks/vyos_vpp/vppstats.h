@@ -21,9 +21,11 @@ struct vppstats_counts {
 struct vppstats_session {
 	uint8_t base_valid;	/* base was taken from a fresh read after the interface was created */
 	uint8_t frozen;		/* final sample, the interface is gone (or about to be) */
+	uint8_t lost;		/* the counters went backwards, they are not those of the session any more */
 	uint32_t inst_gen;	/* VPP instance generation the base belongs to */
 	uint32_t created_seq;	/* number of this session among the sessions created, see the snapshot cache */
 	struct vppstats_counts base;	/* raw counters when the session started */
+	struct vppstats_counts prev;	/* raw counters of the last good read, they never go down */
 	struct vppstats_counts last;	/* last good value relative to base, also the frozen one */
 };
 
