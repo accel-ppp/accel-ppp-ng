@@ -89,7 +89,7 @@ static void snapshot_free(void)
 }
 
 /* the connection is dropped, nothing read through it before can be trusted */
-static void instance_lost(void)
+static void vppstats_instance_lost(void)
 {
 	if (connected) {
 		stat_segment_disconnect();
@@ -101,7 +101,7 @@ static void instance_lost(void)
 	log_warn("vpp: stats segment lost, sessions of the previous VPP instance are no longer accounted\n");
 }
 
-static int stats_connect(void)
+static int vppstats_connect(void)
 {
 	if (stat_segment_connect(VPPSTATS_SOCKET))
 		return -1;
@@ -157,7 +157,7 @@ static int snapshot_store(stat_segment_data_t *e, struct vppstats_counter **snap
 }
 
 /* one ls + dump, NULL if the directory epoch changed or VPP did not answer in time */
-static stat_segment_data_t *snapshot_dump(void)
+static stat_segment_data_t *vppstats_dump_counters(void)
 {
 	stat_segment_data_t *res = NULL;
 	u8 **patterns = NULL;
@@ -184,7 +184,7 @@ static stat_segment_data_t *snapshot_dump(void)
 	return res;
 }
 
-static int unreachable(void)
+static int vppstats_segment_unreachable(void)
 {
 	time_t now = now_sec();
 
@@ -193,7 +193,7 @@ static int unreachable(void)
 	if (now - unreach_since < VPPSTATS_UNREACH_SEC)
 		return -EAGAIN;
 
-	instance_lost();
+	vppstats_instance_lost();
 	return -ENODEV;
 }
 
@@ -202,7 +202,7 @@ static int unreachable(void)
  * new_session: the caller starts a session, so it belongs to the VPP instance that is there now
  * 0 - OK, -EAGAIN - temporarily unavailable, -ENODEV - instance lost
  */
-static int snapshot_refresh(int new_session)
+static int vppstats_refresh_snapshot(int new_session)
 {
 	stat_segment_data_t *res;
 	uint32_t len = 0;
@@ -213,14 +213,14 @@ static int snapshot_refresh(int new_session)
 again:
 	/* a different stats socket is a restarted VPP, whatever its load */
 	if (socket_replaced())
-		instance_lost();
+		vppstats_instance_lost();
 
-	if (!connected && stats_connect())
-		return unreachable();
+	if (!connected && vppstats_connect())
+		return vppstats_segment_unreachable();
 
-	res = snapshot_dump();
+	res = vppstats_dump_counters();
 	if (!res)
-		return unreachable();
+		return vppstats_segment_unreachable();
 	unreach_since = 0;
 
 	/* after a successful ls, 0 means the epoch changed meanwhile, not a stall */
@@ -232,7 +232,7 @@ again:
 		} else {
 			if (now_sec() - last_hb_change >= VPPSTATS_STALL_SEC) {
 				stat_segment_data_free(res);
-				instance_lost();
+				vppstats_instance_lost();
 				/* a new session belongs to the new instance, so go on with it */
 				if (new_session && !reconnected) {
 					reconnected = 1;
@@ -299,7 +299,7 @@ static void counts_to_stats(const struct vppstats_counts *c, struct rtnl_link_st
 /* fresh, uncached read of one session, 'new_session' also checks that the mapping is alive */
 static int session_fresh_read(struct vpphook_private_data_t *pd, int new_session, struct vppstats_counts *raw)
 {
-	int ret = snapshot_refresh(new_session);
+	int ret = vppstats_refresh_snapshot(new_session);
 
 	if (ret)
 		return ret;
