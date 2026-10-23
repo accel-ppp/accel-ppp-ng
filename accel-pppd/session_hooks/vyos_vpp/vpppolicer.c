@@ -245,16 +245,21 @@ int vpppolicer_remove_limiter(struct ap_session *ses)
 	}
 
 	if (vpphook_data->vpppolicer_up) {
+		/*
+		 * Reverse of the install order: take the policer-input node out of
+		 * the feature arcs first, so no packet can reach it while the
+		 * policer it uses is unbound and deleted.
+		 */
+		vpppoe_set_feature(vpphook_data->vpp_sw_if_index, 0, "policer-input", "ip4-unicast");
+		vpppoe_set_feature(vpphook_data->vpp_sw_if_index, 0, "policer-input", "ip6-unicast");
+		vpppoe_set_feature(vpphook_data->vpp_sw_if_index, 0, "policer-input", "ip4-multicast");
+		vpppoe_set_feature(vpphook_data->vpp_sw_if_index, 0, "policer-input", "ip6-multicast");
+
 		vpppolicer_generate_name(policer_input, POLICER_NAME_MAX_LEN - 1, ses, vpphook_data->vpppolicer_up, vpphook_data->vpppolicer_up_burst, 1);
 		ret = vpppolicer_set_input(0, vpphook_data->vpp_sw_if_index, policer_input);
 		if (ret)
 			goto exit;
 		vpppolicer_add_del(0, policer_input, vpphook_data->vpppolicer_up, vpphook_data->vpppolicer_up_burst);
-
-		vpppoe_set_feature(vpphook_data->vpp_sw_if_index, 0, "policer-input", "ip4-unicast");
-		vpppoe_set_feature(vpphook_data->vpp_sw_if_index, 0, "policer-input", "ip6-unicast");
-		vpppoe_set_feature(vpphook_data->vpp_sw_if_index, 0, "policer-input", "ip4-multicast");
-		vpppoe_set_feature(vpphook_data->vpp_sw_if_index, 0, "policer-input", "ip6-multicast");
 
 		vpphook_data->vpppolicer_up = 0;
 		vpphook_data->vpppolicer_up_burst = 0;
