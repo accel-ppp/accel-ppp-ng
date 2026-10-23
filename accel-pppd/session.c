@@ -169,7 +169,13 @@ static void ap_session_timer(struct triton_timer_t *t)
 
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 
-	if (ses->idle_timeout && ts.tv_sec - ses->idle_time >= ses->idle_timeout) {
+	/*
+	 * While the counters are unavailable idle_time is not updated, so the
+	 * idle check would see stale data and disconnect a subscriber that
+	 * is passing traffic. The session timeout does not use the counters.
+	 */
+	if (ret != -EAGAIN && ses->idle_timeout &&
+	    ts.tv_sec - ses->idle_time >= ses->idle_timeout) {
 		log_ppp_msg("idle timeout\n");
 		ap_session_terminate(ses, TERM_SESSION_TIMEOUT, 0);
 	} else if (ses->session_timeout) {
