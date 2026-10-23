@@ -62,14 +62,17 @@ static int req_set_stat(struct rad_req_t *req, struct ap_session *ses)
 {
 	struct rtnl_link_stats64 stats;
 	struct timespec ts;
-	int ret = 0;
+	int ret = 0, rc;
 
 	if (ses->stop_time)
 		ts.tv_sec = ses->stop_time;
 	else
 		clock_gettime(CLOCK_MONOTONIC, &ts);
 
-	if (ap_session_read_stats(ses, &stats) == 0) {
+	rc = ap_session_read_stats(ses, &stats);
+
+	/* -EAGAIN: temporarily unavailable, stats holds the last known values */
+	if (rc == 0 || rc == -EAGAIN) {
 		rad_packet_change_int(req->pack, NULL, "Acct-Input-Octets", (int) (stats.rx_bytes & UINT32_MAX));
 		rad_packet_change_int(req->pack, NULL, "Acct-Output-Octets", (int) (stats.tx_bytes & UINT32_MAX));
 		rad_packet_change_int(req->pack, NULL, "Acct-Input-Packets", (int) (stats.rx_packets & UINT32_MAX));

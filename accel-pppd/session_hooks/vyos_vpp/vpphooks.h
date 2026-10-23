@@ -12,10 +12,12 @@
 #include "ap_session.h"
 
 #include "list.h"
+#include "vppstats.h"
 
 struct vpphook_private_data_t {
 	struct ap_private pd;
 	uint32_t vpp_sw_if_index;
+	struct vppstats_session stats;
 	struct list_head vpp_routes;
 	uint32_t vpppolicer_down;
 	uint64_t vpppolicer_down_burst;

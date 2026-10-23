@@ -13,6 +13,7 @@
 #include "events.h"
 
 #include "vpputils.h"
+#include "vppstats.h"
 
 int sc_vpp_queue_size = 1024;
 
@@ -84,8 +85,10 @@ void vpp_put()
 {
 	vpp_lock();
 	int rfc = __sync_sub_and_fetch(&vpp_connect.rfcounter, 1);
-	if (!rfc)
+	if (!rfc) {
 		vpppoe_disconnect_from_vpp();
+		vppstats_close();
+	}
 	vpp_unlock();
 }
 

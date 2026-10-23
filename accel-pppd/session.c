@@ -91,11 +91,29 @@ void __export ap_session_init(struct ap_session *ses)
 	ses->vrf_name = NULL;
 }
 
+#ifdef HAVE_SESSION_HOOKS
+static int ap_session_has_hook_stats(struct ap_session *ses)
+{
+	return ses->hooks != NULL && ses->hooks->read_stats != NULL;
+}
+#endif /* HAVE_SESSION_HOOKS */
+
+static int ap_session_get_stats(struct ap_session *ses, struct rtnl_link_stats64 *stats)
+{
+#ifdef HAVE_SESSION_HOOKS
+	/* the session interface is not a kernel one, e.g. VPP */
+	if (ap_session_has_hook_stats(ses))
+		return ses->hooks->read_stats(ses, stats);
+#endif /* HAVE_SESSION_HOOKS */
+
+	return iplink_get_stats(ses->ifindex, stats);
+}
+
 void __export ap_session_set_ifindex(struct ap_session *ses)
 {
 	struct rtnl_link_stats64 stats;
 
-	if (iplink_get_stats(ses->ifindex, &stats))
+	if (ap_session_get_stats(ses, &stats))
 		log_ppp_warn("failed to get interface statistics\n");
 	else {
 		ses->acct_rx_packets_i = stats.rx_packets;
@@ -141,13 +159,23 @@ static void ap_session_timer(struct triton_timer_t *t)
 {
 	struct timespec ts;
 	struct ap_session *ses = container_of(t, typeof(*ses), timer);
+	int ret;
 
-	if (ap_session_read_stats(ses, NULL))
+	ret = ap_session_read_stats(ses, NULL);
+
+	/* -EAGAIN: counters are only temporarily unavailable, the session is fine */
+	if (ret && ret != -EAGAIN)
 		ap_session_terminate(ses, TERM_NAS_ERROR, 0);
 
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 
-	if (ses->idle_timeout && ts.tv_sec - ses->idle_time >= ses->idle_timeout) {
+	/*
+	 * While the counters are unavailable idle_time is not updated, so the
+	 * idle check would see stale data and disconnect a subscriber that
+	 * is passing traffic. The session timeout does not use the counters.
+	 */
+	if (ret != -EAGAIN && ses->idle_timeout &&
+	    ts.tv_sec - ses->idle_time >= ses->idle_timeout) {
 		log_ppp_msg("idle timeout\n");
 		ap_session_terminate(ses, TERM_SESSION_TIMEOUT, 0);
 	} else if (ses->session_timeout) {
@@ -169,6 +197,15 @@ void __export ap_session_activate(struct ap_session *ses)
 			ap_session_terminate(ses, TERM_NAS_ERROR, 0);
 			return;
 		}
+
+		/*
+		 * The hook-provided interface exists only now, so the
+		 * accounting baseline could not be taken in
+		 * ap_session_starting(). ses->ifindex is a kernel ifindex and
+		 * stays -1 here, the counters come from the hook instead.
+		 */
+		if (ap_session_has_hook_stats(ses))
+			ap_session_set_ifindex(ses);
 	}
 #endif /* HAVE_SESSION_HOOKS */
 
@@ -416,14 +453,29 @@ static void generate_sessionid(struct ap_session *ses)
 int __export ap_session_read_stats(struct ap_session *ses, struct rtnl_link_stats64 *stats)
 {
 	struct rtnl_link_stats64 lstats;
+	int ret;
 
+#ifdef HAVE_SESSION_HOOKS
+	if (ses->ifindex == -1 && !ap_session_has_hook_stats(ses))
+		return -1;
+#else
 	if (ses->ifindex == -1)
 		return -1;
+#endif /* HAVE_SESSION_HOOKS */
 
 	if (!stats)
 		stats = &lstats;
 
-	if (iplink_get_stats(ses->ifindex, stats)) {
+	ret = ap_session_get_stats(ses, stats);
+	if (ret == -EAGAIN) {
+		/* temporarily unavailable, report the last known values */
+		stats->rx_packets = ses->acct_rx_packets;
+		stats->tx_packets = ses->acct_tx_packets;
+		stats->rx_bytes = ses->acct_rx_bytes;
+		stats->tx_bytes = ses->acct_tx_bytes;
+		return -EAGAIN;
+	}
+	if (ret) {
 		log_ppp_warn("failed to get interface statistics\n");
 		return -1;
 	}
