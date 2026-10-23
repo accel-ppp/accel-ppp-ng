@@ -4,10 +4,14 @@
  * the kernel, so they are read from the VPP stats segment instead of netlink.
  *
  * A VPP sw_if_index is reused as soon as a session is deleted, so it is not
- * an identity. What identifies the counters of a session is
+ * an identity. The identity of the counters is the ap_session: its
+ * vpphook_private_data_t owns the VPP state of the session, that is the
+ * sw_if_index and the struct vppstats_session with
  *  - a baseline taken from a fresh read after its interface was created
  *  - the VPP instance generation the baseline was taken in
  *  - a final sample that is frozen before the interface is deleted
+ * The shared snapshot is only a cache, it serves a session only if it was
+ * dumped after the interface of that session was created.
  */
 
 #include <errno.h>
@@ -68,6 +72,9 @@ static struct stat conn_sock;
 static int conn_sock_valid;
 static int snap_valid;
 static time_t snap_ts;
+/* counts the sessions created, a snapshot knows how many existed when it was dumped */
+static uint32_t create_seq;
+static uint32_t snap_create_seq;
 static struct vppstats_counter *snap_rx, *snap_tx;
 static uint32_t snap_len;
 
@@ -269,6 +276,7 @@ again:
 
 	snap_len = len;
 	snap_ts = now_sec();
+	snap_create_seq = create_seq;
 	snap_valid = 1;
 	return 0;
 }
@@ -277,6 +285,14 @@ static uint64_t sub_clamp(uint64_t a, uint64_t b)
 {
 	/* never wrap around, the counters of a reused index can be lower than the base */
 	return a >= b ? a - b : 0;
+}
+
+/* the cache may serve this session: dumped after its interface was created, recent enough, and it has the index */
+static int snapshot_serves(const struct vppstats_session *s, uint32_t idx)
+{
+	if (!snap_valid || idx >= snap_len || now_sec() - snap_ts >= VPPSTATS_CACHE_SEC)
+		return 0;
+	return (int32_t)(snap_create_seq - s->created_seq) >= 0;
 }
 
 static void counts_from_snapshot(struct vppstats_counts *c, uint32_t idx)
@@ -325,9 +341,12 @@ void vppstats_session_created(struct ap_session *ses)
 		return;
 
 	pthread_mutex_lock(&lock);
-	/* nothing cached before the interface existed may serve its index */
-	snapshot_free();
+	/*
+	 * A snapshot dumped before the interface existed must not serve its
+	 * index, but it stays valid for all other sessions.
+	 */
 	memset(&pd->stats, 0, sizeof(pd->stats));
+	pd->stats.created_seq = ++create_seq;
 	pthread_mutex_unlock(&lock);
 }
 
@@ -366,7 +385,7 @@ int vppstats_read_stats(struct ap_session *ses, struct rtnl_link_stats64 *stats)
 		s->base_valid = 1;
 	} else {
 		/* a session created after the last snapshot is not in it, refresh then too */
-		if (!snap_valid || pd->vpp_sw_if_index >= snap_len || now_sec() - snap_ts >= VPPSTATS_CACHE_SEC) {
+		if (!snapshot_serves(s, pd->vpp_sw_if_index)) {
 			ret = session_fresh_read(pd, 0, &raw);
 			if (ret)
 				goto out;

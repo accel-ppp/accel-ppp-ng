@@ -13,14 +13,16 @@ struct vppstats_counts {
 };
 
 /*
- * Per-session state. A VPP sw_if_index is reused after a session is deleted
- * and says nothing about which session or which VPP instance it belongs to,
- * so the identity of a session is kept here, next to the counters.
+ * Per-session state, owned by the vpphook_private_data_t of the ap_session. A
+ * VPP sw_if_index is reused after a session is deleted and says nothing about
+ * which session or which VPP instance it belongs to, so the identity of the
+ * counters is kept here, next to them.
  */
 struct vppstats_session {
 	uint8_t base_valid;	/* base was taken from a fresh read after the interface was created */
 	uint8_t frozen;		/* final sample, the interface is gone (or about to be) */
 	uint32_t inst_gen;	/* VPP instance generation the base belongs to */
+	uint32_t created_seq;	/* number of this session among the sessions created, see the snapshot cache */
 	struct vppstats_counts base;	/* raw counters when the session started */
 	struct vppstats_counts last;	/* last good value relative to base, also the frozen one */
 };
@@ -32,7 +34,7 @@ struct vppstats_session {
  */
 int vppstats_read_stats(struct ap_session *ses, struct rtnl_link_stats64 *stats);
 
-/* the VPP interface of the session was just created, drop the cached snapshot */
+/* the VPP interface of the session was just created, no snapshot dumped before may serve it */
 void vppstats_session_created(struct ap_session *ses);
 
 /* take the final sample and freeze it, call before the VPP interface is deleted */
