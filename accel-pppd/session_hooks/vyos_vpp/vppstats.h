@@ -37,6 +37,13 @@ int vppstats_read_stats(struct ap_session *ses, struct rtnl_link_stats64 *stats)
 /* the VPP interface of the session was just created, no snapshot dumped before may serve it */
 void vppstats_session_created(struct ap_session *ses);
 
+/*
+ * Take the baseline of the session, call right after the VPP interface was
+ * created and before it forwards anything. 0 - OK, other - there is no
+ * baseline and the session must not be activated.
+ */
+int vppstats_session_baseline(struct ap_session *ses);
+
 /* take the final sample and freeze it, call before the VPP interface is deleted */
 void vppstats_session_freeze(struct ap_session *ses);
 

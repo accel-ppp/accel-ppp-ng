@@ -39,6 +39,9 @@
 /* epoch changes while dumping are transient, try again a few times */
 #define VPPSTATS_RETRIES 3
 #define VPPSTATS_RETRY_NSEC (2 * 1000 * 1000)
+/* the baseline of a new session: the interface may not be in the segment at once */
+#define VPPSTATS_BASELINE_TRIES 50
+#define VPPSTATS_BASELINE_NSEC (20 * 1000 * 1000)
 /* longest wait for VPP to finish updating the segment, the lock is held meanwhile */
 #define VPPSTATS_TIMEOUT_NSEC (200ULL * 1000 * 1000)
 /*
@@ -350,6 +353,53 @@ void vppstats_session_created(struct ap_session *ses)
 	pthread_mutex_unlock(&lock);
 }
 
+/*
+ * The baseline of a new session, taken before its interface forwards
+ * anything. A snapshot dumped after the interface was created serves, it
+ * cannot hold any traffic of the session yet, so sessions that come up at
+ * the same time share one dump.
+ */
+static int session_take_baseline(struct vpphook_private_data_t *pd)
+{
+	struct vppstats_session *s = &pd->stats;
+	struct vppstats_counts raw;
+	int ret = 0;
+
+	pthread_mutex_lock(&lock);
+	if (snapshot_serves(s, pd->vpp_sw_if_index))
+		counts_from_snapshot(&raw, pd->vpp_sw_if_index);
+	else
+		ret = session_fresh_read(pd, 1, &raw);
+	if (!ret) {
+		s->base = raw;
+		s->inst_gen = inst_gen;
+		s->base_valid = 1;
+	}
+	pthread_mutex_unlock(&lock);
+
+	return ret;
+}
+
+int vppstats_session_baseline(struct ap_session *ses)
+{
+	struct vpphook_private_data_t *pd = vpphook_get_pd(ses);
+	int i, ret = -EINVAL;
+
+	if (!pd || !pd->vpp_sw_if_index)
+		return -EINVAL;
+
+	for (i = 0; i < VPPSTATS_BASELINE_TRIES; i++) {
+		struct timespec ts = { 0, VPPSTATS_BASELINE_NSEC };
+
+		ret = session_take_baseline(pd);
+		if (ret != -EAGAIN)
+			break;
+		nanosleep(&ts, NULL);
+	}
+
+	return ret;
+}
+
 int vppstats_read_stats(struct ap_session *ses, struct rtnl_link_stats64 *stats)
 {
 	struct vpphook_private_data_t *pd = vpphook_get_pd(ses);
@@ -375,28 +425,27 @@ int vppstats_read_stats(struct ap_session *ses, struct rtnl_link_stats64 *stats)
 		goto out;
 	}
 
+	/*
+	 * No baseline means the session was not set up by the hook, a baseline
+	 * taken now would leave out the traffic before it.
+	 */
 	if (!s->base_valid) {
-		/* first read of this session: baseline from a fresh read, never from the cache */
-		ret = session_fresh_read(pd, 1, &raw);
+		ret = -ENODEV;
+		goto out;
+	}
+
+	/* a session created after the last snapshot is not in it, refresh then too */
+	if (!snapshot_serves(s, pd->vpp_sw_if_index)) {
+		ret = session_fresh_read(pd, 0, &raw);
 		if (ret)
 			goto out;
-		s->base = raw;
-		s->inst_gen = inst_gen;
-		s->base_valid = 1;
-	} else {
-		/* a session created after the last snapshot is not in it, refresh then too */
-		if (!snapshot_serves(s, pd->vpp_sw_if_index)) {
-			ret = session_fresh_read(pd, 0, &raw);
-			if (ret)
-				goto out;
-		} else
-			counts_from_snapshot(&raw, pd->vpp_sw_if_index);
+	} else
+		counts_from_snapshot(&raw, pd->vpp_sw_if_index);
 
-		/* the refresh may have found a new VPP instance */
-		if (s->inst_gen != inst_gen) {
-			ret = -ENODEV;
-			goto out;
-		}
+	/* the refresh may have found a new VPP instance */
+	if (s->inst_gen != inst_gen) {
+		ret = -ENODEV;
+		goto out;
 	}
 
 	session_update_last(s, &raw);
