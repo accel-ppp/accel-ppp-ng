@@ -368,7 +368,11 @@ skip:
 	 * radattr removal) has finished, so the kernel cannot give the same
 	 * unit index (and thus ifname) to a new session while cleanup still
 	 * references the ifname. */
-	if (!uc)
+	if (!uc
+#ifdef HAVE_SESSION_HOOKS
+	    && !is_non_dev_ppp
+#endif /* HAVE_SESSION_HOOKS */
+	    )
 		close(ppp->unit_fd);
 
 	ppp->unit_fd = -1;
