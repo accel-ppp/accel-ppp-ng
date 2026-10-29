@@ -9,6 +9,7 @@
 
 #include "triton.h"
 #include "events.h"
+#include "log.h"
 #include "ap_session_hooks.h"
 
 #include "ap_session.h"
@@ -20,6 +21,7 @@
 #include "vppiputils.h"
 #include "vpppolicer.h"
 #include "vpppoe.h"
+#include "vppstats.h"
 
 #include "vpphooks.h"
 
@@ -81,7 +83,15 @@ int vpphook_pppoe_create_vpp_session_interface(struct ap_session *ses)
 	}
 
 	vpphook_get_pd(ses)->vpp_sw_if_index = ifindex;
+	vppstats_session_created(ses);
 	vpppoe_dump_interface_name(ifindex, ses->ifname, AP_IFNAME_LEN);
+
+	/* before anything can be forwarded, so no traffic is left out of the accounting */
+	ret = vppstats_session_baseline(ses);
+	if (ret) {
+		log_ppp_error("vpp: no counter baseline for the session interface (%i)\n", ret);
+		return ret;
+	}
 
 	if (ses->ipv4) {
 		vpppoe_set_feature(ifindex, 0, "ip4-not-enabled", "ip4-unicast");
@@ -101,6 +111,9 @@ int vpphook_pppoe_terminate(struct ap_session *ses, int hard)
 	int ret = 0;
 
 	pppoe_get_session_mac_and_sid(ses, &mac, &sid);
+
+	/* the last counters must be read while the interface still exists */
+	vppstats_session_freeze(ses);
 
 	ret = vpp_iproute_flush(ses);
 	if (ret)
@@ -213,6 +226,8 @@ struct ap_session_hooks_t vpp_hooks = {
 
 	.install_limiter = vpppolicer_install_limiter,
 	.remove_limiter = vpppolicer_remove_limiter,
+
+	.read_stats = vppstats_read_stats,
 
 	.is_non_dev_ppp = 1,
 	.is_non_socket_dhcpv6_nd = 1
