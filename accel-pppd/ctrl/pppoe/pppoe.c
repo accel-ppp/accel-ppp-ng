@@ -209,7 +209,7 @@ static void disconnect(struct pppoe_conn_t *conn)
 		pthread_mutex_unlock(&serv->lock);
 
 	pthread_mutex_lock(&sid_lock);
-	sid_map[conn->sid/(8*sizeof(long))] |= 1 << (conn->sid % (8*sizeof(long)));
+	sid_map[conn->sid/(8*sizeof(long))] |= 1lu << (conn->sid % (8*sizeof(long)));
 	pthread_mutex_unlock(&sid_lock);
 
 	_free(conn->ctrl.service_name);
