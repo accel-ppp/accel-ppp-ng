@@ -177,6 +177,10 @@ int vpppolicer_install_limiter(struct ap_session *ses, int down_speed, int down_
 	char policer_output[POLICER_NAME_MAX_LEN] = {};
 	struct vpphook_private_data_t *vpphook_data = vpphook_get_pd(ses);
 
+	/* no interface, before it was created or after it was deleted: 0 is local0 */
+	if (!vpphook_data->vpp_sw_if_index)
+		return 0;
+
 	/* convert rate to kbits/s and burst to bits */
 	down_speed = down_speed * 8 / 1000;
 	down_burst = down_burst * 8;
