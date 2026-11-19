@@ -52,6 +52,12 @@ To skip tests related to ipoe and vlan_mon kernel modules:
 sudo python3 -m pytest -Wall --order-dependencies -v -m "not ipoe_driver and not vlan_mon_driver"
 ```
 
+The tests of the VPP plugin (`accel-pppd/vpp/`) need only a C compiler. `vppstats.c` is built against a fake of the VPP stats client (`accel-pppd/vpp/vppstats/`), so neither VPP nor accel-pppd nor root is needed:
+```bash
+# from this dir (tests)
+python3 -m pytest -v accel-pppd/vpp
+```
+
 ## Preparations (for coverage report)
 
 Perform preparation steps for running tests  without coverage
