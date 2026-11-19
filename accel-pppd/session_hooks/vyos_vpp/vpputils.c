@@ -55,7 +55,7 @@ void vpppoe_disconnect_from_vpp()
 }
 
 struct vapi_ctx_s * vpp_get_vapi() {
-	if (vpp_connect.vapi == NULL && __sync_fetch_and_and(&vpp_connect.rfcounter, 1)) {
+	if (vpp_connect.vapi == NULL && __sync_fetch_and_add(&vpp_connect.rfcounter, 0)) {
 		vpppoe_connect_to_vpp();
 	}
 	return vpp_connect.vapi;
