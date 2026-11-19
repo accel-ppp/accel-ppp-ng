@@ -13,6 +13,7 @@
 #include "events.h"
 
 #include "vpputils.h"
+#include "vppstats.h"
 
 int sc_vpp_queue_size = 1024;
 
@@ -55,7 +56,7 @@ void vpppoe_disconnect_from_vpp()
 }
 
 struct vapi_ctx_s * vpp_get_vapi() {
-	if (vpp_connect.vapi == NULL && __sync_fetch_and_and(&vpp_connect.rfcounter, 1)) {
+	if (vpp_connect.vapi == NULL && __sync_fetch_and_add(&vpp_connect.rfcounter, 0)) {
 		vpppoe_connect_to_vpp();
 	}
 	return vpp_connect.vapi;
@@ -84,8 +85,10 @@ void vpp_put()
 {
 	vpp_lock();
 	int rfc = __sync_sub_and_fetch(&vpp_connect.rfcounter, 1);
-	if (!rfc)
+	if (!rfc) {
 		vpppoe_disconnect_from_vpp();
+		vppstats_close();
+	}
 	vpp_unlock();
 }
 
