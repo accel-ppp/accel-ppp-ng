@@ -33,13 +33,19 @@ static vapi_error_e vpppoe_s_session_add_reply_callback(struct vapi_ctx_s *ctx,
 														vapi_payload_pppoe_add_del_session_reply *reply)
 {
 	uint32_t *sw_ifindex = (uint32_t *)callback_ctx;
-	if (rv == VAPI_OK) {
-		if (sw_ifindex) {
-			*sw_ifindex = reply->sw_if_index;
-		}
-	}
 
-	return rv;
+	if (rv != VAPI_OK)
+		return rv;
+
+	/* the reply arrived, but VPP may have refused the request: keep the caller's index then.
+	 * VAPI_EINVAL stays below VAPI_ECON_FAIL, so vpp_check_error() does not drop the connection */
+	if (reply->retval)
+		return VAPI_EINVAL;
+
+	if (sw_ifindex)
+		*sw_ifindex = reply->sw_if_index;
+
+	return VAPI_OK;
 }
 
 int vpppoe_sync_add_pppoe_interface(uint8_t *client_mac, uint16_t session_id, uint32_t *sw_ifindex)
