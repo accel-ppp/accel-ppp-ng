@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -638,11 +639,13 @@ static void send_echo_request(struct triton_timer_t *t)
 		struct lcp_hdr_t hdr;
 		uint32_t magic;
 	} __attribute__((packed)) msg;
+	int ret;
 
 	if (conf_echo_timeout) {
-		ap_session_read_stats(&lcp->ppp->ses, &stats);
+		ret = ap_session_read_stats(&lcp->ppp->ses, &stats);
 
-		if (lcp->last_ipackets != stats.rx_packets) {
+		/* -EAGAIN: stats holds the last known values; any other error leaves it untouched */
+		if ((ret == 0 || ret == -EAGAIN) && lcp->last_ipackets != stats.rx_packets) {
 			lcp->last_ipackets = stats.rx_packets;
 			lcp->last_echo_ts = _time();
 			lcp->echo_sent = 0;
