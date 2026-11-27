@@ -914,12 +914,9 @@ struct rad_attr_t __export *rad_packet_find_attr(struct rad_packet_t *pack, cons
 	return NULL;
 }
 
-int rad_packet_send(struct rad_packet_t *pack, int fd, struct sockaddr_in *addr)
+/* Sign the Message-Authenticator attribute if the packet carries one. */
+int rad_packet_sign(struct rad_packet_t *pack)
 {
-	int n;
-
-	clock_gettime(CLOCK_MONOTONIC, &pack->tv);
-
 	if (pack->secret && pack->message_authenticator) {
 		uint8_t hmac[HMAC_MD5_LEN];
 		uint8_t *ma_attr = locate_message_authenticator_attr(pack);
@@ -948,6 +945,16 @@ int rad_packet_send(struct rad_packet_t *pack, int fd, struct sockaddr_in *addr)
 		}
 	}
 
+	return 0;
+}
+
+/* Transmit an already built and signed packet. */
+int rad_packet_write(struct rad_packet_t *pack, int fd, struct sockaddr_in *addr)
+{
+	int n;
+
+	clock_gettime(CLOCK_MONOTONIC, &pack->tv);
+
 	while (1) {
 		if (addr)
 			n = sendto(fd, pack->buf, pack->len, 0, (struct sockaddr *)addr, sizeof(*addr));
@@ -966,6 +973,14 @@ int rad_packet_send(struct rad_packet_t *pack, int fd, struct sockaddr_in *addr)
 	}
 
 	return 0;
+}
+
+int rad_packet_send(struct rad_packet_t *pack, int fd, struct sockaddr_in *addr)
+{
+	if (rad_packet_sign(pack))
+		return -1;
+
+	return rad_packet_write(pack, fd, addr);
 }
 
 static void init(void)
