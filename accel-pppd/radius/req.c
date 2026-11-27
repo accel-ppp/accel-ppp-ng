@@ -409,13 +409,22 @@ int __rad_req_send(struct rad_req_t *req, int async)
 	if (refresh_packet_secret(req))
 		goto out_err;
 
-	if (rad_packet_send(req->pack, req->hnd.fd, NULL))
+	if (rad_packet_sign(req->pack))
 		goto out_err;
 
 	if (req->log) {
 		req->log("send ");
 		rad_packet_print(req->pack, req->serv, req->log);
 	}
+
+	/*
+	 * A failed write (EPERM, ENETUNREACH/EHOSTUNREACH, ENOBUFS,
+	 * ECONNREFUSED, ...) is handled like a lost packet. The error is
+	 * logged by rad_packet_write() and the request is still treated as
+	 * sent, so the response timer drives the usual timeout/max-try/failover
+	 * and acct-timeout logic instead of failing the request immediately.
+	 */
+	rad_packet_write(req->pack, req->hnd.fd, NULL);
 
 	if (req->sent)
 		req->sent(req, 0);
